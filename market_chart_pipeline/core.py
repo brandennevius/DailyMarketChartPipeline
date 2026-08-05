@@ -17,6 +17,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .fmp import enrich_symbol, historical_eod
+from .technicals import calculate_technical_context
 
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 
@@ -172,10 +173,15 @@ def _fmt_pct(value) -> str:
     return "N/A" if value is None else f"{float(value):.1f}%"
 
 
+def _fmt_num(value, digits=2) -> str:
+    return "N/A" if value is None else f"{float(value):.{digits}f}"
+
+
 def build_pdf(session_date: str, records: list[dict], output: Path) -> None:
     styles=getSampleStyleSheet(); story=[Paragraph(f"Market Chart Packet — {session_date}",styles["Title"]),Spacer(1,10),Paragraph(f"Verified chart records: {len(records)}",styles["BodyText"]),Spacer(1,10)]
     for i,r in enumerate(records):
-        m=r["metrics"]; e=r.get("fmp",{}); earnings=e.get("earnings",{}); profile=e.get("profile",{}); qg=e.get("quarterly_growth",{}); cross=e.get("ohlcv_crosscheck",{})
+        m=r["metrics"]; e=r.get("fmp",{}); tech=r.get("technical_context",{}); earnings=e.get("earnings",{}); profile=e.get("profile",{}); qg=e.get("quarterly_growth",{}); cross=e.get("ohlcv_crosscheck",{})
+        rs=tech.get("relative_strength",{}); vol=tech.get("volume",{}); base=tech.get("base_analysis",{})
         story.append(Paragraph(f"{m['ticker']} — {m['quantitative_gate']}",styles["Heading2"]))
         data=[["Price","21D","50D","200D","ATR%","Rel Vol","52W Dist"],[f"{m['current_price']:.2f}",f"{m['sma21']:.2f}",f"{m['sma50']:.2f}",f"{m['sma200']:.2f}",f"{m['atr_pct']:.1f}%",f"{m['relative_volume']:.2f}x",f"{m['pct_from_52w_high']:.1f}%"]]
         t=Table(data,repeatRows=1); t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.lightgrey),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),8)])); story.append(t); story.append(Spacer(1,5))
@@ -187,7 +193,14 @@ def build_pdf(session_date: str, records: list[dict], output: Path) -> None:
             f"OHLCV: {cross.get('classification') or cross.get('status')} ({cross.get('severity') or 'UNKNOWN'}) | "
             f"Close diff: {_fmt_pct(cross.get('latest_close_diff_pct'))} | Volume diff: {_fmt_pct(cross.get('latest_volume_diff_pct'))}"
         )
-        story.append(Paragraph(details,styles["BodyText"])); story.append(Spacer(1,6))
+        story.append(Paragraph(details,styles["BodyText"])); story.append(Spacer(1,4))
+        tech_details=(
+            f"Technical: vs 21D {_fmt_pct(tech.get('distance_from_21d_pct'))} | vs 50D {_fmt_pct(tech.get('distance_from_50d_pct'))} | "
+            f"10W {tech.get('ma_10w_trend')} ({_fmt_pct(tech.get('ma_10w_slope_4w_pct'))}) | 40W {tech.get('ma_40w_trend')} ({_fmt_pct(tech.get('ma_40w_slope_4w_pct'))}) | "
+            f"RS {rs.get('trend_21d')} / New high: {rs.get('new_high_52w')} | Up/Down Vol 20D: {_fmt_num(vol.get('up_down_volume_ratio_20'))} | "
+            f"A/D: {vol.get('accumulation_distribution_estimate')} | Base: {base.get('status')}"
+        )
+        story.append(Paragraph(tech_details,styles["BodyText"])); story.append(Spacer(1,6))
         story.append(Image(r["daily_chart"],width=520,height=315)); story.append(Spacer(1,6)); story.append(Image(r["weekly_chart"],width=520,height=315))
         if i < len(records)-1: story.append(PageBreak())
     SimpleDocTemplate(str(output),pagesize=letter,rightMargin=26,leftMargin=26,topMargin=24,bottomMargin=24).build(story)
@@ -218,9 +231,10 @@ def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, fe
             except Exception as exc:
                 enrichment_errors[symbol]=str(exc)
                 fmp_data={"provider":"FMP","status":"ERROR","error":str(exc)}
+            technical_context=calculate_technical_context(bars[symbol],rs)
             daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"
             render_chart(symbol,bars[symbol],session_date,daily,False,rs); render_chart(symbol,bars[symbol],session_date,weekly,True,rs)
-            records.append({"metrics":asdict(m),"fmp":fmp_data,"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat()})
+            records.append({"metrics":asdict(m),"technical_context":technical_context,"fmp":fmp_data,"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat()})
         except Exception as exc: errors[symbol]=str(exc)
     status="COMPLETE" if not errors and not enrichment_errors else "COMPLETE_WITH_WARNINGS"
     payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"enrichment_errors":enrichment_errors,"records":records,"status":status,"chart_data_source":"ALPACA","enrichment_source":"FMP","benchmark":"^GSPC"}
