@@ -16,7 +16,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .fmp import FMPError, enrich_symbol, historical_eod
+from .fmp import enrich_symbol, historical_eod
 
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 
@@ -159,14 +159,17 @@ def render_chart(symbol: str, df: pd.DataFrame, session_date: str, path: Path, w
         if rs_line is not None and not rs_line.empty:
             rs_line=rs_line.reindex(df.index).ffill()
     path.parent.mkdir(parents=True,exist_ok=True)
-    addplots=[]
-    kwargs={}
+    addplots=[]; kwargs={}
     if rs_line is not None and rs_line.notna().sum() >= 20:
         addplots=[mpf.make_addplot(rs_line, panel=2, ylabel="RS vs S&P 500")]
         kwargs["panel_ratios"]=(5,1.4,1.2)
     mpf.plot(df,type="candle",volume=True,mav=mav,addplot=addplots,style="yahoo",title=title,figsize=(13,8.2),tight_layout=True,savefig=dict(fname=str(path),dpi=150,bbox_inches="tight"),**kwargs)
     plt.close("all")
     if not path.exists() or path.stat().st_size < 5000: raise ValidationError(f"{symbol}: chart render failed")
+
+
+def _fmt_pct(value) -> str:
+    return "N/A" if value is None else f"{float(value):.1f}%"
 
 
 def build_pdf(session_date: str, records: list[dict], output: Path) -> None:
@@ -176,7 +179,14 @@ def build_pdf(session_date: str, records: list[dict], output: Path) -> None:
         story.append(Paragraph(f"{m['ticker']} — {m['quantitative_gate']}",styles["Heading2"]))
         data=[["Price","21D","50D","200D","ATR%","Rel Vol","52W Dist"],[f"{m['current_price']:.2f}",f"{m['sma21']:.2f}",f"{m['sma50']:.2f}",f"{m['sma200']:.2f}",f"{m['atr_pct']:.1f}%",f"{m['relative_volume']:.2f}x",f"{m['pct_from_52w_high']:.1f}%"]]
         t=Table(data,repeatRows=1); t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.lightgrey),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),8)])); story.append(t); story.append(Spacer(1,5))
-        details=f"FMP: {profile.get('sector') or 'Sector unavailable'} / {profile.get('industry') or 'Industry unavailable'} | Earnings: {earnings.get('earnings_date') or 'UNVERIFIED'} | Days: {earnings.get('days_to_earnings')} | Q EPS growth: {qg.get('eps_growth_pct')}% | Q revenue growth: {qg.get('revenue_growth_pct')}% | OHLCV discrepancy: {cross.get('material_discrepancy')}"
+        earnings_label = earnings.get("earnings_date") or earnings.get("earnings_status") or "UNAVAILABLE"
+        details=(
+            f"FMP: {profile.get('sector') or 'Sector unavailable'} / {profile.get('industry') or 'Industry unavailable'} | "
+            f"Earnings: {earnings_label} | Days: {earnings.get('days_to_earnings')} | "
+            f"Q EPS growth: {_fmt_pct(qg.get('eps_growth_pct'))} | Q revenue growth: {_fmt_pct(qg.get('revenue_growth_pct'))} | "
+            f"OHLCV: {cross.get('classification') or cross.get('status')} ({cross.get('severity') or 'UNKNOWN'}) | "
+            f"Close diff: {_fmt_pct(cross.get('latest_close_diff_pct'))} | Volume diff: {_fmt_pct(cross.get('latest_volume_diff_pct'))}"
+        )
         story.append(Paragraph(details,styles["BodyText"])); story.append(Spacer(1,6))
         story.append(Image(r["daily_chart"],width=520,height=315)); story.append(Spacer(1,6)); story.append(Image(r["weekly_chart"],width=520,height=315))
         if i < len(records)-1: story.append(PageBreak())
