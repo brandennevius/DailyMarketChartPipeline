@@ -1,0 +1,54 @@
+name: Build Market Chart Packet
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_date:
+        description: Completed US session date (YYYY-MM-DD)
+        required: true
+        type: string
+      tickers:
+        description: Comma-separated verified manifest tickers
+        required: true
+        type: string
+      feed:
+        description: Alpaca market-data feed
+        required: true
+        default: iex
+        type: choice
+        options: [iex, sip]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: pytest -q
+      - name: Build chart packet
+        run: |
+          python -m market_chart_pipeline.cli \
+            --session-date "${{ inputs.session_date }}" \
+            --tickers "${{ inputs.tickers }}" \
+            --feed "${{ inputs.feed }}" \
+            --output-dir "output/${{ inputs.session_date }}"
+      - name: Upload packet
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-chart-packet-${{ inputs.session_date }}
+          path: output/${{ inputs.session_date }}/
+          if-no-files-found: error
+          retention-days: 30
