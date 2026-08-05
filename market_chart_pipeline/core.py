@@ -14,8 +14,9 @@ import requests
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from .fmp import FMPError, enrich_symbol, historical_eod
 
 DATA_URL = "https://data.alpaca.markets/v2/stocks/bars"
 
@@ -87,8 +88,8 @@ def fetch_bars(symbols: Iterable[str], session_date: str, feed: str = "iex") -> 
         if response.status_code != 200:
             raise ValidationError(f"Alpaca request failed ({response.status_code}): {response.text[:250]}")
         payload = response.json()
-        for symbol, bars in (payload.get("bars") or {}).items():
-            rows.setdefault(symbol.upper(), []).extend(bars or [])
+        for symbol, values in (payload.get("bars") or {}).items():
+            rows.setdefault(symbol.upper(), []).extend(values or [])
         token = payload.get("next_page_token")
         if not token:
             break
@@ -128,8 +129,7 @@ def calculate_metrics(symbol: str, df: pd.DataFrame, session_date: str) -> Metri
     sma21, sma50, sma200 = close.rolling(21).mean(), close.rolling(50).mean(), close.rolling(200).mean()
     prev = close.shift(1)
     tr = pd.concat([(df.High-df.Low),(df.High-prev).abs(),(df.Low-prev).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean()
-    avgvol = volume.rolling(50).mean()
+    atr = tr.rolling(14).mean(); avgvol = volume.rolling(50).mean()
     price = float(close.iloc[-1]); high52 = float(df.tail(252).High.max())
     change = close.pct_change(); up = volume.where(change > 0, 0).tail(50).sum(); down = volume.where(change < 0, 0).tail(50).sum()
     recent = df.tail(26); rc = recent.Close.pct_change(); pv = recent.Volume.shift(1)
@@ -147,28 +147,40 @@ def calculate_metrics(symbol: str, df: pd.DataFrame, session_date: str) -> Metri
     return Metrics(symbol, session_date, price, float(sma21.iloc[-1]), float(sma50.iloc[-1]), float(sma200.iloc[-1]), float(atr.iloc[-1]), float(atr.iloc[-1]/price*100), float(avgvol.iloc[-1]), float(volume.iloc[-1]/avgvol.iloc[-1]), float((close*volume).rolling(50).mean().iloc[-1]), high52, float((price/high52-1)*100), float((price/sma50.iloc[-1]-1)*100), float((price/sma200.iloc[-1]-1)*100), _tightness(df,5), _tightness(df,10), _tightness(df,15), None if down<=0 else float(up/down), acc, dist, gate, reasons)
 
 
-def render_chart(symbol: str, df: pd.DataFrame, session_date: str, path: Path, weekly: bool=False) -> None:
+def render_chart(symbol: str, df: pd.DataFrame, session_date: str, path: Path, weekly: bool=False, rs_line: pd.Series | None=None) -> None:
     df=validate_bars(symbol,df,session_date)
     if weekly:
         df=df.resample("W-FRI").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna().tail(156)
         mav=(10,40); title=f"{symbol} — Weekly through {session_date}"
+        if rs_line is not None and not rs_line.empty:
+            rs_line=rs_line.resample("W-FRI").last().reindex(df.index).ffill()
     else:
         df=df.tail(252); mav=(21,50,200); title=f"{symbol} — Daily through {session_date}"
+        if rs_line is not None and not rs_line.empty:
+            rs_line=rs_line.reindex(df.index).ffill()
     path.parent.mkdir(parents=True,exist_ok=True)
-    mpf.plot(df,type="candle",volume=True,mav=mav,style="yahoo",title=title,figsize=(13,7.5),tight_layout=True,savefig=dict(fname=str(path),dpi=150,bbox_inches="tight"))
+    addplots=[]
+    kwargs={}
+    if rs_line is not None and rs_line.notna().sum() >= 20:
+        addplots=[mpf.make_addplot(rs_line, panel=2, ylabel="RS vs S&P 500")]
+        kwargs["panel_ratios"]=(5,1.4,1.2)
+    mpf.plot(df,type="candle",volume=True,mav=mav,addplot=addplots,style="yahoo",title=title,figsize=(13,8.2),tight_layout=True,savefig=dict(fname=str(path),dpi=150,bbox_inches="tight"),**kwargs)
     plt.close("all")
     if not path.exists() or path.stat().st_size < 5000: raise ValidationError(f"{symbol}: chart render failed")
 
 
 def build_pdf(session_date: str, records: list[dict], output: Path) -> None:
-    styles=getSampleStyleSheet(); story=[Paragraph(f"Market Chart Packet — {session_date}",styles["Title"]),Spacer(1,12),Paragraph(f"Verified chart records: {len(records)}",styles["BodyText"]),Spacer(1,12)]
+    styles=getSampleStyleSheet(); story=[Paragraph(f"Market Chart Packet — {session_date}",styles["Title"]),Spacer(1,10),Paragraph(f"Verified chart records: {len(records)}",styles["BodyText"]),Spacer(1,10)]
     for i,r in enumerate(records):
-        m=r["metrics"]; story.append(Paragraph(f"{m['ticker']} — {m['quantitative_gate']}",styles["Heading2"]))
+        m=r["metrics"]; e=r.get("fmp",{}); earnings=e.get("earnings",{}); profile=e.get("profile",{}); qg=e.get("quarterly_growth",{}); cross=e.get("ohlcv_crosscheck",{})
+        story.append(Paragraph(f"{m['ticker']} — {m['quantitative_gate']}",styles["Heading2"]))
         data=[["Price","21D","50D","200D","ATR%","Rel Vol","52W Dist"],[f"{m['current_price']:.2f}",f"{m['sma21']:.2f}",f"{m['sma50']:.2f}",f"{m['sma200']:.2f}",f"{m['atr_pct']:.1f}%",f"{m['relative_volume']:.2f}x",f"{m['pct_from_52w_high']:.1f}%"]]
-        t=Table(data,repeatRows=1); t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.lightgrey),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),8)])); story.append(t); story.append(Spacer(1,8))
-        story.append(Image(r["daily_chart"],width=520,height=300)); story.append(Spacer(1,8)); story.append(Image(r["weekly_chart"],width=520,height=300))
+        t=Table(data,repeatRows=1); t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.lightgrey),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),8)])); story.append(t); story.append(Spacer(1,5))
+        details=f"FMP: {profile.get('sector') or 'Sector unavailable'} / {profile.get('industry') or 'Industry unavailable'} | Earnings: {earnings.get('earnings_date') or 'UNVERIFIED'} | Days: {earnings.get('days_to_earnings')} | Q EPS growth: {qg.get('eps_growth_pct')}% | Q revenue growth: {qg.get('revenue_growth_pct')}% | OHLCV discrepancy: {cross.get('material_discrepancy')}"
+        story.append(Paragraph(details,styles["BodyText"])); story.append(Spacer(1,6))
+        story.append(Image(r["daily_chart"],width=520,height=315)); story.append(Spacer(1,6)); story.append(Image(r["weekly_chart"],width=520,height=315))
         if i < len(records)-1: story.append(PageBreak())
-    SimpleDocTemplate(str(output),pagesize=letter,rightMargin=28,leftMargin=28,topMargin=28,bottomMargin=28).build(story)
+    SimpleDocTemplate(str(output),pagesize=letter,rightMargin=26,leftMargin=26,topMargin=24,bottomMargin=24).build(story)
 
 
 def sha256(path: Path) -> str:
@@ -178,17 +190,30 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, feed: str="iex") -> dict:
+def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, feed: str="iex", provenance: dict | None=None) -> dict:
     symbols=normalize_symbols(symbols); output_dir.mkdir(parents=True,exist_ok=True); charts=output_dir/"charts"
-    bars=fetch_bars(symbols,session_date,feed); records=[]; errors={}
+    bars=fetch_bars(symbols,session_date,feed); records=[]; errors={}; enrichment_errors={}
+    start=(pd.Timestamp(session_date)-pd.Timedelta(days=1100)).date().isoformat()
+    try:
+        benchmark=historical_eod("^GSPC",start,session_date)
+    except Exception as exc:
+        benchmark=pd.DataFrame(); enrichment_errors["^GSPC"]=str(exc)
     for symbol in symbols:
         try:
             if symbol not in bars: raise ValidationError(f"{symbol}: no bars returned")
-            m=calculate_metrics(symbol,bars[symbol],session_date); daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"
-            render_chart(symbol,bars[symbol],session_date,daily); render_chart(symbol,bars[symbol],session_date,weekly,True)
-            records.append({"metrics":asdict(m),"daily_chart":str(daily),"weekly_chart":str(weekly)})
+            m=calculate_metrics(symbol,bars[symbol],session_date)
+            fmp_data={}; rs=pd.Series(dtype=float)
+            try:
+                fmp_data,rs=enrich_symbol(symbol,session_date,m.current_price,bars[symbol],benchmark)
+            except Exception as exc:
+                enrichment_errors[symbol]=str(exc)
+                fmp_data={"provider":"FMP","status":"ERROR","error":str(exc)}
+            daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"
+            render_chart(symbol,bars[symbol],session_date,daily,False,rs); render_chart(symbol,bars[symbol],session_date,weekly,True,rs)
+            records.append({"metrics":asdict(m),"fmp":fmp_data,"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat()})
         except Exception as exc: errors[symbol]=str(exc)
-    payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"records":records,"status":"COMPLETE" if not errors else "COMPLETE_WITH_WARNINGS"}
+    status="COMPLETE" if not errors and not enrichment_errors else "COMPLETE_WITH_WARNINGS"
+    payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"enrichment_errors":enrichment_errors,"records":records,"status":status,"chart_data_source":"ALPACA","enrichment_source":"FMP","benchmark":"^GSPC"}
     json_path=output_dir/f"Market_Chart_Data_{session_date}.json"; json_path.write_text(json.dumps(payload,indent=2),encoding="utf-8")
     pdf_path=output_dir/f"Market_Chart_Packet_{session_date}.pdf"; build_pdf(session_date,records,pdf_path)
     payload["artifacts"]={"json":str(json_path),"pdf":str(pdf_path),"pdf_sha256":sha256(pdf_path)}
