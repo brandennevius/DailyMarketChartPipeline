@@ -28,10 +28,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
       CHART_PACKET_RECIPIENT: ${{ secrets.CHART_PACKET_RECIPIENT }}
@@ -47,6 +48,15 @@ jobs:
         run: pip install -e . pytest
       - name: Run tests
         run: python -m pytest -q
+      - name: Verify required secrets
+        run: |
+          python - <<'PY'
+          import os
+          required = ['ALPACA_API_KEY','ALPACA_API_SECRET','FMP_API_KEY','GMAIL_ADDRESS','GMAIL_APP_PASSWORD','CHART_PACKET_RECIPIENT']
+          missing = [name for name in required if not os.getenv(name)]
+          if missing:
+              raise SystemExit(f'Missing required secrets: {missing}')
+          PY
       - name: Resolve request
         id: request
         env:
