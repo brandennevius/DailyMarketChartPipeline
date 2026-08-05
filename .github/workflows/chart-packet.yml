@@ -32,6 +32,9 @@ jobs:
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      CHART_PACKET_RECIPIENT: ${{ secrets.CHART_PACKET_RECIPIENT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,3 +101,8 @@ jobs:
           path: output/${{ steps.request.outputs.session_date }}/
           if-no-files-found: error
           retention-days: 30
+      - name: Email packet to Gmail
+        run: |
+          python -m market_chart_pipeline.mailer \
+            --session-date "${{ steps.request.outputs.session_date }}" \
+            --output-dir "output/${{ steps.request.outputs.session_date }}"
