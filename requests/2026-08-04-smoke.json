@@ -1,0 +1,41 @@
+{
+  "status": "COMPLETE",
+  "session_date": "2026-08-04",
+  "feed": "iex",
+  "unique_ticker_count": 3,
+  "records": [
+    {
+      "ticker": "HPE",
+      "chart_required": true,
+      "sources": [
+        {
+          "source_type": "BRANDENS_WATCHLIST",
+          "label": "BRANDENS WATCHLIST",
+          "pdf_page": 11
+        }
+      ]
+    },
+    {
+      "ticker": "KARO",
+      "chart_required": true,
+      "sources": [
+        {
+          "source_type": "STANDARD_MARKETSURGE",
+          "label": "Near Pivot",
+          "pdf_page": 6
+        }
+      ]
+    },
+    {
+      "ticker": "NVDA",
+      "chart_required": false,
+      "sources": [
+        {
+          "source_type": "PORTFOLIO",
+          "label": "CURRENT PORTFOLIO",
+          "pdf_page": null
+        }
+      ]
+    }
+  ]
+}
