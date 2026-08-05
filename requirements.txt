@@ -1,0 +1,7 @@
+pandas>=2.2.0
+numpy>=1.26.0
+requests>=2.32.0
+matplotlib>=3.9.0
+mplfinance>=0.12.10b0
+reportlab>=4.2.0
+pytest>=8.0.0
