@@ -14,13 +14,25 @@ def frame(closes, volumes, start="2026-07-01"):
     }, index=idx)
 
 
-def test_crosscheck_flags_material_volume_difference():
+def test_crosscheck_classifies_volume_only_difference():
     alpaca = frame([100 + i for i in range(20)], [1_000_000] * 20)
     fmp = frame([100 + i for i in range(20)], [2_000_000] * 20)
     result = compare_ohlcv(alpaca, fmp, alpaca.index[-1].date().isoformat())
     assert result["status"] == "COMPARED"
-    assert result["material_discrepancy"] is True
+    assert result["classification"] == "VOLUME_SOURCE_MISMATCH"
+    assert result["severity"] == "INFO"
+    assert result["volume_only"] is True
+    assert result["price_critical"] is False
     assert result["latest_close_diff_pct"] == 0
+
+
+def test_crosscheck_classifies_price_history_conflict():
+    alpaca = frame([100 + i for i in range(20)], [1_000_000] * 20)
+    fmp = frame([(100 + i) * 0.95 for i in range(20)], [1_000_000] * 20)
+    result = compare_ohlcv(alpaca, fmp, alpaca.index[-1].date().isoformat())
+    assert result["classification"] == "PRICE_HISTORY_CONFLICT"
+    assert result["severity"] == "CRITICAL"
+    assert result["price_critical"] is True
 
 
 def test_rs_line_is_rebased_to_100():
