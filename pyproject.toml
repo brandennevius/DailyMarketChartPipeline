@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daily-market-chart-pipeline"
+version = "0.1.0"
+description = "Fail-closed chart packet generator for the Daily Market Review"
+requires-python = ">=3.12"
+dependencies = [
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "requests>=2.32.0",
+  "matplotlib>=3.9.0",
+  "mplfinance>=0.12.10b0",
+  "reportlab>=4.2.0"
+]
+
+[tool.setuptools.packages.find]
+include = ["market_chart_pipeline*"]
