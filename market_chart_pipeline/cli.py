@@ -1,18 +1,70 @@
 from __future__ import annotations
+
 import argparse
+import json
 from pathlib import Path
-from .core import build_packet
+
+from .core import ValidationError, build_packet
+from .manifest import load_manifest
 
 
-def main():
-    p=argparse.ArgumentParser()
-    p.add_argument("--session-date",required=True)
-    p.add_argument("--tickers",required=True,help="Comma-separated current-session manifest tickers")
-    p.add_argument("--output-dir",default="output")
-    p.add_argument("--feed",default="iex",choices=["iex","sip"])
-    a=p.parse_args()
-    tickers=[x.strip().upper() for x in a.tickers.split(",") if x.strip()]
-    result=build_packet(tickers,a.session_date,Path(a.output_dir),a.feed)
-    print(f"status={result['status']} verified={result['verified_count']} errors={result['error_count']}")
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--manifest", help="Verified current-session manifest JSON")
+    source.add_argument("--tickers", help="Comma-separated tickers for manual testing only")
+    parser.add_argument("--session-date")
+    parser.add_argument("--output-dir", default="output")
+    parser.add_argument("--feed", choices=["iex", "sip"])
+    args = parser.parse_args()
 
-if __name__=="__main__": main()
+    provenance = None
+    if args.manifest:
+        request = load_manifest(args.manifest)
+        session_date = request.session_date
+        feed = args.feed or request.feed
+        tickers = request.tickers
+        provenance = request.records_by_ticker
+    else:
+        if not args.session_date:
+            raise ValidationError("--session-date is required with --tickers")
+        session_date = args.session_date
+        feed = args.feed or "iex"
+        tickers = [x.strip().upper() for x in args.tickers.split(",") if x.strip()]
+
+    output_dir = Path(args.output_dir) / session_date
+    result = build_packet(tickers, session_date, output_dir, feed)
+    if provenance is not None:
+        result["source_manifest"] = {
+            "path": str(args.manifest),
+            "records": provenance,
+        }
+        for record in result["records"]:
+            ticker = record["metrics"]["ticker"]
+            record["sources"] = provenance[ticker]["sources"]
+            record["chart_required"] = provenance[ticker]["chart_required"]
+        json_path = Path(result["artifacts"]["json"])
+        json_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    summary_path = output_dir / "run_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "session_date": session_date,
+                "status": result["status"],
+                "verified_count": result["verified_count"],
+                "error_count": result["error_count"],
+                "pdf_sha256": result["artifacts"]["pdf_sha256"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(
+        f"session_date={session_date} status={result['status']} "
+        f"verified={result['verified_count']} errors={result['error_count']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
