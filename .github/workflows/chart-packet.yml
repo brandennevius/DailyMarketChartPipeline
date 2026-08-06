@@ -21,9 +21,15 @@ on:
     branches: [main]
     paths:
       - 'requests/20*.json'
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: market-chart-packet-builder
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -68,36 +74,76 @@ jobs:
           python - <<'PY'
           import json, os, subprocess
           from pathlib import Path
+
           out = Path(os.environ['GITHUB_OUTPUT'])
-          if os.environ['EVENT_NAME'] == 'push':
+          event_name = os.environ['EVENT_NAME']
+
+          if event_name == 'push':
               changed = subprocess.check_output(
                   ['git','diff-tree','--no-commit-id','--name-only','-r','HEAD'], text=True
               ).splitlines()
-              candidates = sorted(p for p in changed if p.startswith('requests/20') and p.endswith('.json'))
+              candidates = sorted(
+                  p for p in changed
+                  if p.startswith('requests/20') and p.endswith('.json')
+              )
               if len(candidates) != 1:
                   raise SystemExit(f'Expected exactly one request manifest in commit; found {candidates}')
               manifest = candidates[0]
-              payload = json.loads(Path(manifest).read_text())
-              session_date = payload['session_date']
-              lines = [f'mode=manifest', f'manifest={manifest}', f'session_date={session_date}']
+              receipt = f"processed/{Path(manifest).stem}.json"
+              if Path(receipt).exists():
+                  lines = ['skip=true', 'reason=request already processed']
+              else:
+                  payload = json.loads(Path(manifest).read_text())
+                  lines = [
+                      'skip=false',
+                      'mode=manifest',
+                      f'manifest={manifest}',
+                      f'receipt={receipt}',
+                      f"session_date={payload['session_date']}",
+                  ]
+
+          elif event_name == 'schedule':
+              manifests = sorted(Path('requests').glob('20*.json'), reverse=True)
+              manifest = next(
+                  (
+                      p for p in manifests
+                      if not Path('processed', f'{p.stem}.json').exists()
+                  ),
+                  None,
+              )
+              if manifest is None:
+                  lines = ['skip=true', 'reason=no unprocessed request manifests']
+              else:
+                  payload = json.loads(manifest.read_text())
+                  receipt = Path('processed', f'{manifest.stem}.json')
+                  lines = [
+                      'skip=false',
+                      'mode=manifest',
+                      f'manifest={manifest.as_posix()}',
+                      f'receipt={receipt.as_posix()}',
+                      f"session_date={payload['session_date']}",
+                  ]
+
           else:
               lines = [
+                  'skip=false',
                   'mode=manual',
                   f"session_date={os.environ['MANUAL_DATE']}",
                   f"tickers={os.environ['MANUAL_TICKERS']}",
                   f"feed={os.environ.get('MANUAL_FEED') or 'iex'}",
               ]
+
           with out.open('a') as f:
               f.write('\n'.join(lines) + '\n')
           PY
       - name: Build chart packet from manifest
-        if: steps.request.outputs.mode == 'manifest'
+        if: steps.request.outputs.skip != 'true' && steps.request.outputs.mode == 'manifest'
         run: |
           python -m market_chart_pipeline.cli \
             --manifest "${{ steps.request.outputs.manifest }}" \
             --output-dir output
       - name: Build chart packet manually
-        if: steps.request.outputs.mode == 'manual'
+        if: steps.request.outputs.skip != 'true' && steps.request.outputs.mode == 'manual'
         run: |
           python -m market_chart_pipeline.cli \
             --session-date "${{ steps.request.outputs.session_date }}" \
@@ -105,6 +151,7 @@ jobs:
             --feed "${{ steps.request.outputs.feed }}" \
             --output-dir output
       - name: Upload packet
+        if: steps.request.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: market-chart-packet-${{ steps.request.outputs.session_date }}
@@ -112,7 +159,37 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Email packet to Gmail
+        if: steps.request.outputs.skip != 'true'
         run: |
           python -m market_chart_pipeline.mailer \
             --session-date "${{ steps.request.outputs.session_date }}" \
             --output-dir "output/${{ steps.request.outputs.session_date }}"
+      - name: Mark manifest processed
+        if: steps.request.outputs.skip != 'true' && steps.request.outputs.mode == 'manifest'
+        env:
+          MANIFEST: ${{ steps.request.outputs.manifest }}
+          RECEIPT: ${{ steps.request.outputs.receipt }}
+          SESSION_DATE: ${{ steps.request.outputs.session_date }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          receipt = Path(os.environ['RECEIPT'])
+          receipt.parent.mkdir(parents=True, exist_ok=True)
+          receipt.write_text(json.dumps({
+              'manifest': os.environ['MANIFEST'],
+              'session_date': os.environ['SESSION_DATE'],
+              'workflow_run_id': os.environ['RUN_ID'],
+              'workflow_run_attempt': os.environ['RUN_ATTEMPT'],
+              'processed_at': datetime.now(timezone.utc).isoformat(),
+          }, indent=2) + '\n')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ steps.request.outputs.receipt }}"
+          git commit -m "Mark chart request processed: ${{ steps.request.outputs.manifest }}"
+          git push
