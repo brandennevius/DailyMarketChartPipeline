@@ -3,13 +3,17 @@ name: Build Market Chart Packet
 on:
   workflow_dispatch:
     inputs:
+      manifest_path:
+        description: Optional verified request manifest path (preferred)
+        required: false
+        type: string
       session_date:
-        description: Completed US session date (YYYY-MM-DD)
-        required: true
+        description: Completed US session date (YYYY-MM-DD), manual ticker mode only
+        required: false
         type: string
       tickers:
-        description: Comma-separated verified manifest tickers (manual test mode)
-        required: true
+        description: Comma-separated tickers, manual ticker mode only
+        required: false
         type: string
       feed:
         description: Alpaca market-data feed
@@ -67,6 +71,7 @@ jobs:
         id: request
         env:
           EVENT_NAME: ${{ github.event_name }}
+          MANUAL_MANIFEST: ${{ inputs.manifest_path }}
           MANUAL_DATE: ${{ inputs.session_date }}
           MANUAL_TICKERS: ${{ inputs.tickers }}
           MANUAL_FEED: ${{ inputs.feed }}
@@ -78,29 +83,34 @@ jobs:
           out = Path(os.environ['GITHUB_OUTPUT'])
           event_name = os.environ['EVENT_NAME']
 
+          def manifest_outputs(manifest: Path):
+              if not manifest.as_posix().startswith('requests/') or manifest.suffix != '.json':
+                  raise SystemExit(f'Invalid manifest path: {manifest}')
+              if not manifest.exists():
+                  raise SystemExit(f'Manifest does not exist: {manifest}')
+              payload = json.loads(manifest.read_text())
+              receipt = Path('processed', f'{manifest.stem}.json')
+              if receipt.exists():
+                  return ['skip=true', 'reason=request already processed']
+              return [
+                  'skip=false',
+                  'mode=manifest',
+                  f'manifest={manifest.as_posix()}',
+                  f'receipt={receipt.as_posix()}',
+                  f"session_date={payload['session_date']}",
+              ]
+
           if event_name == 'push':
               changed = subprocess.check_output(
                   ['git','diff-tree','--no-commit-id','--name-only','-r','HEAD'], text=True
               ).splitlines()
               candidates = sorted(
-                  p for p in changed
+                  Path(p) for p in changed
                   if p.startswith('requests/20') and p.endswith('.json')
               )
               if len(candidates) != 1:
                   raise SystemExit(f'Expected exactly one request manifest in commit; found {candidates}')
-              manifest = candidates[0]
-              receipt = f"processed/{Path(manifest).stem}.json"
-              if Path(receipt).exists():
-                  lines = ['skip=true', 'reason=request already processed']
-              else:
-                  payload = json.loads(Path(manifest).read_text())
-                  lines = [
-                      'skip=false',
-                      'mode=manifest',
-                      f'manifest={manifest}',
-                      f'receipt={receipt}',
-                      f"session_date={payload['session_date']}",
-                  ]
+              lines = manifest_outputs(candidates[0])
 
           elif event_name == 'schedule':
               manifests = sorted(Path('requests').glob('20*.json'), reverse=True)
@@ -114,22 +124,21 @@ jobs:
               if manifest is None:
                   lines = ['skip=true', 'reason=no unprocessed request manifests']
               else:
-                  payload = json.loads(manifest.read_text())
-                  receipt = Path('processed', f'{manifest.stem}.json')
-                  lines = [
-                      'skip=false',
-                      'mode=manifest',
-                      f'manifest={manifest.as_posix()}',
-                      f'receipt={receipt.as_posix()}',
-                      f"session_date={payload['session_date']}",
-                  ]
+                  lines = manifest_outputs(manifest)
+
+          elif os.environ.get('MANUAL_MANIFEST', '').strip():
+              lines = manifest_outputs(Path(os.environ['MANUAL_MANIFEST'].strip()))
 
           else:
+              session_date = os.environ.get('MANUAL_DATE', '').strip()
+              tickers = os.environ.get('MANUAL_TICKERS', '').strip()
+              if not session_date or not tickers:
+                  raise SystemExit('Provide manifest_path, or provide both session_date and tickers')
               lines = [
                   'skip=false',
                   'mode=manual',
-                  f"session_date={os.environ['MANUAL_DATE']}",
-                  f"tickers={os.environ['MANUAL_TICKERS']}",
+                  f'session_date={session_date}',
+                  f'tickers={tickers}',
                   f"feed={os.environ.get('MANUAL_FEED') or 'iex'}",
               ]
 
