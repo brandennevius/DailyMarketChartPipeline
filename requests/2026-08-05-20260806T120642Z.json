@@ -1,0 +1,53 @@
+{
+  "session_date": "2026-08-05",
+  "run_id": "20260806T120642Z",
+  "feed": "iex",
+  "expected_unique_ticker_count": 38,
+  "records": [
+    {
+      "ticker": "AIZ",
+      "required_chart": true,
+      "sources": [
+        {"source_type": "STANDARD_MARKETSURGE", "source_label": "Power from Pivot", "pdf_page": 2},
+        {"source_type": "STANDARD_MARKETSURGE", "source_label": "Tight Areas", "pdf_page": 4}
+      ]
+    },
+    {"ticker":"ANET","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"AVT","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"CL","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"DELL","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":7}]},
+    {"ticker":"DXCM","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"ELF","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"EXPE","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":8}]},
+    {"ticker":"FCX","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"GRMN","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":8}]},
+    {"ticker":"HON","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"HPE","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"INSW","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":7}]},
+    {"ticker":"ITW","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"KARO","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"LGIH","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"LITE","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"LLY","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"LNVGY","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":7},{"source_type":"STANDARD_MARKETSURGE","source_label":"Breaking Out Today","pdf_page":9}]},
+    {"ticker":"NET","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"NRIX","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Tight Areas","pdf_page":5}]},
+    {"ticker":"ORKA","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"PH","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"PINS","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"PLTR","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"RACE","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"RNG","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Power from Pivot","pdf_page":2}]},
+    {"ticker":"ROKU","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"RVMD","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Tight Areas","pdf_page":5}]},
+    {"ticker":"S","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"SHC","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"SLS","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1}]},
+    {"ticker":"SN","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Power from Pivot","pdf_page":3}]},
+    {"ticker":"TPR","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Near Pivot","pdf_page":6}]},
+    {"ticker":"TVTX","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":8},{"source_type":"STANDARD_MARKETSURGE","source_label":"Breaking Out Today","pdf_page":9}]},
+    {"ticker":"URGN","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Power from Pivot","pdf_page":3}]},
+    {"ticker":"WHD","required_chart":true,"sources":[{"source_type":"BRANDENS_WATCHLIST","source_label":"BRANDENS WATCHLIST","pdf_page":1},{"source_type":"STANDARD_MARKETSURGE","source_label":"Recent Breakouts","pdf_page":8}]},
+    {"ticker":"YOU","required_chart":true,"sources":[{"source_type":"STANDARD_MARKETSURGE","source_label":"Breaking Out Today","pdf_page":9}]}
+  ]
+}
