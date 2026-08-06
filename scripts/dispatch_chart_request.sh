@@ -45,13 +45,12 @@ while (( $(date -u +%s) <= DEADLINE )); do
     --limit 20 \
     --json databaseId,createdAt,status,conclusion,url,displayTitle,headBranch)"
 
-  MATCH="$(python - "$STARTED_AT" "$MANIFEST_PATH" <<'PY' <<<"$RUN_JSON"
-import json, sys
-from datetime import datetime, timezone, timedelta
+  MATCH="$(RUN_JSON="$RUN_JSON" python - "$STARTED_AT" <<'PY'
+import json, os, sys
+from datetime import datetime, timedelta
 
 started = datetime.fromisoformat(sys.argv[1].replace('Z', '+00:00')) - timedelta(seconds=5)
-manifest = sys.argv[2]
-runs = json.load(sys.stdin)
+runs = json.loads(os.environ['RUN_JSON'])
 eligible = []
 for run in runs:
     created = datetime.fromisoformat(run['createdAt'].replace('Z', '+00:00'))
