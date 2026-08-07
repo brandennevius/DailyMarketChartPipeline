@@ -79,17 +79,25 @@ jobs:
           python - <<'PY'
           import json, os, subprocess
           from pathlib import Path
+          from market_chart_pipeline.core import ValidationError
+          from market_chart_pipeline.manifest import load_manifest
 
           out = Path(os.environ['GITHUB_OUTPUT'])
           event_name = os.environ['EVENT_NAME']
 
-          def manifest_outputs(manifest: Path):
+          def receipt_for(manifest: Path) -> Path:
+              return Path('processed', f'{manifest.stem}.json')
+
+          def validate_manifest(manifest: Path):
               if not manifest.as_posix().startswith('requests/') or manifest.suffix != '.json':
-                  raise SystemExit(f'Invalid manifest path: {manifest}')
+                  raise ValidationError(f'invalid manifest path: {manifest}')
               if not manifest.exists():
-                  raise SystemExit(f'Manifest does not exist: {manifest}')
-              payload = json.loads(manifest.read_text())
-              receipt = Path('processed', f'{manifest.stem}.json')
+                  raise ValidationError(f'manifest does not exist: {manifest}')
+              return load_manifest(manifest)
+
+          def manifest_outputs(manifest: Path):
+              request = validate_manifest(manifest)
+              receipt = receipt_for(manifest)
               if receipt.exists():
                   return ['skip=true', 'reason=request already processed']
               return [
@@ -97,7 +105,7 @@ jobs:
                   'mode=manifest',
                   f'manifest={manifest.as_posix()}',
                   f'receipt={receipt.as_posix()}',
-                  f"session_date={payload['session_date']}",
+                  f'session_date={request.session_date}',
               ]
 
           if event_name == 'push':
@@ -110,24 +118,41 @@ jobs:
               )
               if len(candidates) != 1:
                   raise SystemExit(f'Expected exactly one request manifest in commit; found {candidates}')
-              lines = manifest_outputs(candidates[0])
+              try:
+                  lines = manifest_outputs(candidates[0])
+              except ValidationError as exc:
+                  raise SystemExit(f'Invalid pushed request manifest {candidates[0]}: {exc}') from exc
 
           elif event_name == 'schedule':
               manifests = sorted(Path('requests').glob('20*.json'), reverse=True)
-              manifest = next(
-                  (
-                      p for p in manifests
-                      if not Path('processed', f'{p.stem}.json').exists()
-                  ),
-                  None,
-              )
-              if manifest is None:
-                  lines = ['skip=true', 'reason=no unprocessed request manifests']
+              selected = None
+              invalid = []
+              for manifest in manifests:
+                  if receipt_for(manifest).exists():
+                      continue
+                  try:
+                      validate_manifest(manifest)
+                  except (ValidationError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                      invalid.append(f'{manifest.as_posix()}: {exc}')
+                      print(f'Ignoring invalid legacy/unprocessed manifest {manifest}: {exc}')
+                      continue
+                  selected = manifest
+                  break
+
+              if selected is None:
+                  reason = 'no valid unprocessed request manifests'
+                  if invalid:
+                      reason += f'; ignored {len(invalid)} invalid manifest(s)'
+                  lines = ['skip=true', f'reason={reason}']
               else:
-                  lines = manifest_outputs(manifest)
+                  lines = manifest_outputs(selected)
 
           elif os.environ.get('MANUAL_MANIFEST', '').strip():
-              lines = manifest_outputs(Path(os.environ['MANUAL_MANIFEST'].strip()))
+              manifest = Path(os.environ['MANUAL_MANIFEST'].strip())
+              try:
+                  lines = manifest_outputs(manifest)
+              except ValidationError as exc:
+                  raise SystemExit(f'Invalid dispatched request manifest {manifest}: {exc}') from exc
 
           else:
               session_date = os.environ.get('MANUAL_DATE', '').strip()
