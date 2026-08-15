@@ -185,6 +185,7 @@ jobs:
             --feed "${{ steps.request.outputs.feed }}" \
             --output-dir output
       - name: Upload packet
+        id: upload
         if: steps.request.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -193,11 +194,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Email packet to Gmail
+        id: delivery
         if: steps.request.outputs.skip != 'true'
+        continue-on-error: true
         run: |
           python -m market_chart_pipeline.mailer \
             --session-date "${{ steps.request.outputs.session_date }}" \
-            --output-dir "output/${{ steps.request.outputs.session_date }}"
+            --output-dir "output/${{ steps.request.outputs.session_date }}" \
+            --artifact-url "${{ steps.upload.outputs.artifact-url }}" \
+            --status-json delivery-status.json
       - name: Mark manifest processed
         if: steps.request.outputs.skip != 'true' && steps.request.outputs.mode == 'manifest'
         env:
@@ -206,11 +211,24 @@ jobs:
           SESSION_DATE: ${{ steps.request.outputs.session_date }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
+          DELIVERY_CONCLUSION: ${{ steps.delivery.conclusion }}
         run: |
           python - <<'PY'
           import json, os
           from datetime import datetime, timezone
           from pathlib import Path
+
+          status_path = Path('delivery-status.json')
+          if status_path.exists():
+              delivery = json.loads(status_path.read_text(encoding='utf-8'))
+          else:
+              delivery = {
+                  'status': 'FAILED',
+                  'error': 'delivery step did not write delivery-status.json',
+              }
+          delivery['step_outcome'] = os.environ['DELIVERY_OUTCOME']
+          delivery['step_conclusion'] = os.environ['DELIVERY_CONCLUSION']
 
           receipt = Path(os.environ['RECEIPT'])
           receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +238,7 @@ jobs:
               'workflow_run_id': os.environ['RUN_ID'],
               'workflow_run_attempt': os.environ['RUN_ATTEMPT'],
               'processed_at': datetime.now(timezone.utc).isoformat(),
+              'delivery': delivery,
           }, indent=2) + '\n')
           PY
           git config user.name "github-actions[bot]"
@@ -227,3 +246,6 @@ jobs:
           git add "${{ steps.request.outputs.receipt }}"
           git commit -m "Mark chart request processed: ${{ steps.request.outputs.manifest }}"
           git push
+      - name: Fail if delivery failed
+        if: steps.request.outputs.skip != 'true' && steps.delivery.outcome == 'failure'
+        run: exit 1
