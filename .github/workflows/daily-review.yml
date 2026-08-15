@@ -1,0 +1,64 @@
+name: Daily Market & Portfolio Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_date:
+        description: Completed US session date (YYYY-MM-DD)
+        required: true
+        type: string
+      chart_packet_dir:
+        description: Optional chart packet artifact directory in the checkout
+        required: false
+        type: string
+  schedule:
+    - cron: '30 22 * * 1-5'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-market-review
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install package and test dependencies
+        run: pip install -e . pytest
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Resolve session date
+        id: session
+        env:
+          MANUAL_DATE: ${{ inputs.session_date }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import date
+          session = os.environ.get('MANUAL_DATE') or date.today().isoformat()
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f'session_date={session}\n')
+          PY
+      - name: Run deterministic review
+        run: |
+          python -m market_chart_pipeline.daily_review \
+            --date "${{ steps.session.outputs.session_date }}" \
+            --session-date "${{ steps.session.outputs.session_date }}" \
+            --mode read-only \
+            --chart-packet-dir "${{ inputs.chart_packet_dir }}" \
+            --output-dir reports/market
+      - name: Upload review artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-market-review-${{ steps.session.outputs.session_date }}
+          path: reports/market/${{ steps.session.outputs.session_date }}/
+          if-no-files-found: error
+          retention-days: 30
