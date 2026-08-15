@@ -1,17 +1,17 @@
 {
-  "audit_status": "failed",
+  "audit_status": "pass",
   "delivery": {
     "artifact_url": null,
     "error": null,
-    "failure_notice_step": "success",
-    "fallback_reason": "failure_notice_only_no_report_delivered",
-    "message_size_bytes": 402,
-    "review_delivery_step": "skipped",
-    "status": "FAILURE_NOTICE_SENT"
+    "failure_notice_step": "skipped",
+    "fallback_reason": null,
+    "message_size_bytes": 245592,
+    "review_delivery_step": "success",
+    "status": "SUCCESS"
   },
   "manifest": "source-input/source-manifest.json",
-  "packet_hash": null,
-  "processed_at": "2026-08-15T23:08:07.296921+00:00",
+  "packet_hash": "0335ac15c3e38fffcd7654bb0275a6737ede1e9cd2c9b4e66abd4e04c6d44a4c",
+  "processed_at": "2026-08-15T23:11:55.313052+00:00",
   "session_date": "2026-08-14",
   "terminal": true
 }
