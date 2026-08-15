@@ -1,4 +1,5 @@
 import json
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
@@ -148,3 +149,17 @@ def test_failure_notice_is_not_reported_as_success(monkeypatch):
     result = review_mailer.send_failure(SESSION, "source audit failed")
     assert result.status == "FAILURE_NOTICE_SENT"
     assert result.status != "SUCCESS"
+
+
+def test_pdf_attachment_can_be_selected_by_mime_without_filename(tmp_path):
+    from market_chart_pipeline.source_acquisition import _write_matching_attachment
+
+    message = EmailMessage()
+    message.set_content("scan attached")
+    message.add_attachment(b"%PDF-1.4", maintype="application", subtype="pdf")
+    part = list(message.iter_attachments())[0]
+    del part["Content-Disposition"]
+
+    path = _write_matching_attachment(message, tmp_path, ".pdf")
+    assert path.name == "source-attachment.pdf"
+    assert path.read_bytes() == b"%PDF-1.4"
