@@ -39,6 +39,12 @@ terminal receipt:
 gh workflow run daily-review.yml --ref main -f session_date=2026-08-14
 ```
 
+If a terminal failure occurred before any canonical packet was created, an
+explicit repair replay may use
+`-f retry_prepacket_failure=true`. This flag cannot rebuild a terminal run
+that already has a packet hash; delivery retries for such a run must reuse its
+frozen artifact.
+
 Monitor it with:
 
 ```bash

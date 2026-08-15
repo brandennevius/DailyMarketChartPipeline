@@ -80,9 +80,10 @@ def acquire_gmail_sources(session_date: str, output_dir: Path) -> list[dict[str,
     sources = []
     with imaplib.IMAP4_SSL("imap.gmail.com", 993) as client:
         client.login(address, password)
-        status, _ = client.select("[Gmail]/All Mail", readonly=True)
-        if status != "OK":
-            status, _ = client.select("INBOX", readonly=True)
+        # Both required self-sent source messages are retained in INBOX. Using
+        # the portable mailbox avoids provider-specific quoting rules for
+        # names such as "[Gmail]/All Mail".
+        status, _ = client.select("INBOX", readonly=True)
         if status != "OK":
             raise ValidationError("Could not open Gmail source mailbox")
 
