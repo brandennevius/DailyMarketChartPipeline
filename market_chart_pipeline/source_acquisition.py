@@ -44,12 +44,16 @@ def _find_exact_message(client: imaplib.IMAP4_SSL, subject: str, session_date: s
         raise ValidationError(f"Gmail search failed for {subject}")
     matches: list[tuple[bytes, email.message.Message]] = []
     for message_id in data[0].split():
-        status, payload = client.fetch(message_id, "(RFC822)")
+        status, payload = client.fetch(message_id, "(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE)])")
         if status != "OK" or not payload or not isinstance(payload[0], tuple):
             continue
-        message = email.message_from_bytes(payload[0][1])
-        if _subject(message) == subject:
-            matches.append((message_id, message))
+        header = email.message_from_bytes(payload[0][1])
+        if _subject(header) != subject:
+            continue
+        status, full_payload = client.fetch(message_id, "(RFC822)")
+        if status != "OK" or not full_payload or not isinstance(full_payload[0], tuple):
+            raise ValidationError(f"Gmail could not fetch the exact message {subject!r}")
+        matches.append((message_id, email.message_from_bytes(full_payload[0][1])))
     if len(matches) != 1:
         raise ValidationError(f"Expected exactly one Gmail message with subject {subject!r}; found {len(matches)}")
     return matches[0]
@@ -57,13 +61,21 @@ def _find_exact_message(client: imaplib.IMAP4_SSL, subject: str, session_date: s
 
 def _write_matching_attachment(message: email.message.Message, output_dir: Path, suffix: str) -> Path:
     matches = []
+    expected_mime = {".pdf": "application/pdf", ".json": "application/json"}.get(suffix.lower())
     for part in message.walk():
         filename = part.get_filename()
-        if filename and filename.lower().endswith(suffix.lower()):
+        filename_matches = bool(filename and filename.lower().endswith(suffix.lower()))
+        mime_matches = bool(expected_mime and part.get_content_type().lower() == expected_mime)
+        if not part.is_multipart() and (filename_matches or mime_matches):
             matches.append(part)
     if len(matches) != 1:
         raise ValidationError(f"Expected exactly one {suffix} attachment; found {len(matches)}")
-    filename = _safe_attachment_name(str(make_header(decode_header(matches[0].get_filename()))))
+    raw_filename = matches[0].get_filename()
+    filename = (
+        _safe_attachment_name(str(make_header(decode_header(raw_filename))))
+        if raw_filename
+        else f"source-attachment{suffix.lower()}"
+    )
     path = output_dir / filename
     path.write_bytes(matches[0].get_payload(decode=True) or b"")
     if not path.stat().st_size:
