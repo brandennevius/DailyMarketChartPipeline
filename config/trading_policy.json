@@ -1,0 +1,51 @@
+{
+  "policy_version": "2026.08.15",
+  "calculation_version": "daily-review-v1",
+  "actions": ["HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"],
+  "hard_rules": {
+    "max_initial_loss_pct": 8.0,
+    "atr_stop_multiple": 2.0,
+    "break_even_after_r": 1.0
+  },
+  "profit_zone": {
+    "lower_pct_from_pivot": 20.0,
+    "upper_pct_from_pivot": 25.0
+  },
+  "rapid_advance": {
+    "gain_pct": 20.0,
+    "max_trading_days": 15,
+    "minimum_hold_weeks": 8.0
+  },
+  "trailing": {
+    "peak_drawdown_exit_pct": 11.0
+  },
+  "patience": {
+    "eight_week_hold_weeks": 8.0,
+    "slow_leader_patience_weeks": 13.0,
+    "minimum_gain_pct_for_patience": 10.0
+  },
+  "shakeout": {
+    "watch_drawdown_pct": 8.0,
+    "reentry_reclaim_pct": 3.0,
+    "max_watch_days": 20,
+    "minimum_reclaim_volume_ratio": 1.1
+  },
+  "portfolio": {
+    "max_position_risk_pct": 1.0,
+    "max_total_open_risk_pct": 6.0
+  },
+  "candidate_scoring": {
+    "fundamental_quality": 0.30,
+    "relative_strength_group": 0.25,
+    "technical_setup": 0.30,
+    "accumulation_supply": 0.10,
+    "new_catalyst": 0.05
+  },
+  "exposure_bands": {
+    "Defensive": "0%-20%",
+    "Light": "20%-40%",
+    "Moderate": "40%-60%",
+    "Constructive": "60%-80%",
+    "Aggressive": "80%-100%"
+  }
+}
