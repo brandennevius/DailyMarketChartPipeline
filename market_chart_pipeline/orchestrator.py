@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .adapters import derive_candidates_from_chart, normalize_portfolio_snapshot
 from .audit import audit_packet
 from .packet import build_review_packet, freeze_packet
 from .policy import load_policy
@@ -27,20 +28,46 @@ def run_daily_review(
     candidates_path: str | None = None,
     shakeouts_path: str | None = None,
     chart_packet_dir: str | None = None,
+    source_manifest_path: str | None = None,
+    audit_profile: str = "standard",
 ) -> dict:
     if mode != "read-only":
         raise ValueError("Only read-only mode is currently supported")
     resolved_session = session_date or requested_date
     policy = load_policy(policy_path)
+    raw_portfolio = _optional_json(portfolio_path, [])
+    portfolio_risk_details = None
+    if isinstance(raw_portfolio, dict) and raw_portfolio.get("metadata"):
+        portfolio, portfolio_risk_details = normalize_portfolio_snapshot(raw_portfolio, resolved_session)
+    elif isinstance(raw_portfolio, list):
+        portfolio = raw_portfolio
+    else:
+        raise ValueError("Portfolio input must be a normalized list or a daily portfolio snapshot object")
+
+    chart_dir = Path(chart_packet_dir) if chart_packet_dir else None
+    chart_payload = {}
+    if chart_dir:
+        chart_json = chart_dir / f"Market_Chart_Data_{resolved_session}.json"
+        if chart_json.exists():
+            chart_payload = load_json(chart_json)
+    candidates = _optional_json(candidates_path, None)
+    if candidates is None and chart_payload:
+        candidates = derive_candidates_from_chart(chart_payload)
+    candidates = candidates or []
+    source_manifest = _optional_json(source_manifest_path, {})
+
     packet = build_review_packet(
         requested_date=requested_date,
         session_date=resolved_session,
         policy=policy,
         market_data=_optional_json(market_data_path, {}),
-        portfolio=_optional_json(portfolio_path, []),
-        candidates=_optional_json(candidates_path, []),
+        portfolio=portfolio,
+        candidates=candidates,
         shakeouts=_optional_json(shakeouts_path, []),
-        chart_packet_dir=Path(chart_packet_dir) if chart_packet_dir else None,
+        chart_packet_dir=chart_dir,
+        source_manifest=source_manifest,
+        portfolio_risk_details=portfolio_risk_details,
+        audit_profile=audit_profile,
     )
     evidence = audit_packet(packet)
     packet["validation_evidence"] = evidence
@@ -71,6 +98,8 @@ def main() -> None:
     parser.add_argument("--candidates")
     parser.add_argument("--shakeouts")
     parser.add_argument("--chart-packet-dir")
+    parser.add_argument("--source-manifest")
+    parser.add_argument("--audit-profile", choices=["standard", "strict-core"], default="standard")
     args = parser.parse_args()
     result = run_daily_review(
         requested_date=args.requested_date,
@@ -83,6 +112,8 @@ def main() -> None:
         candidates_path=args.candidates,
         shakeouts_path=args.shakeouts,
         chart_packet_dir=args.chart_packet_dir,
+        source_manifest_path=args.source_manifest,
+        audit_profile=args.audit_profile,
     )
     print(json.dumps({key: value for key, value in result.items() if key != "packet"}, indent=2))
 

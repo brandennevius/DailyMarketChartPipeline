@@ -227,7 +227,7 @@ def evaluate_shakeout(record: dict[str, Any], policy: dict[str, Any]) -> dict[st
     ticker = record.get("ticker", "UNKNOWN")
     missing = _missing(record, ["prior_support_price", "current_price"])
     if missing:
-        return {"ticker": ticker, "state": "INSUFFICIENT_EVIDENCE", "action": ACTION_INSUFFICIENT, "events": [_event("shakeout_evidence", "INSUFFICIENT_EVIDENCE", 1, "Missing shakeout inputs", missing=missing)]}
+        return {"ticker": ticker, "state": "INSUFFICIENT_EVIDENCE", "action": ACTION_INSUFFICIENT, "rationale": "Required shakeout evidence is missing.", "events": [_event("shakeout_evidence", "INSUFFICIENT_EVIDENCE", 1, "Missing shakeout inputs", missing=missing)]}
     support = float(record["prior_support_price"])
     current = float(record["current_price"])
     drawdown = ((support - current) / support) * 100.0
@@ -236,10 +236,10 @@ def evaluate_shakeout(record: dict[str, Any], policy: dict[str, Any]) -> dict[st
     reclaimed = current >= support * (1.0 + float(cfg["reentry_reclaim_pct"]) / 100.0)
     events = [_event("shakeout_watch", "WATCH" if drawdown >= float(cfg["watch_drawdown_pct"]) else "NO_WATCH", 2, "Evaluated support break depth", drawdown_pct=round(drawdown, 2))]
     if reclaimed and volume_ratio >= float(cfg["minimum_reclaim_volume_ratio"]):
-        return {"ticker": ticker, "state": "REENTRY_READY", "action": ACTION_ADD, "events": [*events, _event("reentry_reclaim", "TRIGGERED", 1, "Price reclaimed support with sufficient volume", volume_ratio=volume_ratio)]}
+        return {"ticker": ticker, "state": "REENTRY_READY", "action": ACTION_ADD, "rationale": "Price reclaimed support with sufficient volume.", "events": [*events, _event("reentry_reclaim", "TRIGGERED", 1, "Price reclaimed support with sufficient volume", volume_ratio=volume_ratio)]}
     if days > int(cfg["max_watch_days"]):
-        return {"ticker": ticker, "state": "EXPIRED", "action": ACTION_REPAIR, "events": [*events, _event("shakeout_expiry", "TRIGGERED", 1, "Shakeout watch exceeded maximum age", days_since_break=days)]}
-    return {"ticker": ticker, "state": "WATCH", "action": ACTION_HOLD, "events": events}
+        return {"ticker": ticker, "state": "EXPIRED", "action": ACTION_REPAIR, "rationale": "The shakeout watch expired without a valid reclaim.", "events": [*events, _event("shakeout_expiry", "TRIGGERED", 1, "Shakeout watch exceeded maximum age", days_since_break=days)]}
+    return {"ticker": ticker, "state": "WATCH", "action": ACTION_HOLD, "rationale": "The reclaim requirements are not yet satisfied.", "events": events}
 
 
 def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
@@ -284,4 +284,14 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
         "classification": classification,
         "action": action,
         "rationale": rationale,
+        "events": [
+            _event(
+                "candidate_classification",
+                classification,
+                3,
+                rationale,
+                score=round(total, 2),
+                pivot_verification_status=candidate.get("pivot_verification_status"),
+            )
+        ],
     }

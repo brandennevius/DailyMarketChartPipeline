@@ -48,6 +48,7 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
         return result
 
     requested = {str(ticker).upper() for ticker in payload.get("requested_tickers", [])}
+    manifest_records = set(((payload.get("source_manifest") or {}).get("records") or {}).keys())
     records = payload.get("records") if isinstance(payload.get("records"), list) else []
     verified = {
         str(record.get("metrics", {}).get("ticker", "")).upper()
@@ -66,6 +67,8 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
         result["errors"].append("Chart packet PDF hash does not match chart JSON")
     if verified - requested:
         result["errors"].append("Chart records contain tickers outside the requested set")
+    if manifest_records != requested:
+        result["errors"].append("Chart source-manifest ticker set does not match requested tickers")
     result.update(
         {
             "status": "verified" if not result["errors"] else "insufficient_evidence",
@@ -87,6 +90,9 @@ def build_review_packet(
     candidates: list[dict[str, Any]] | None = None,
     shakeouts: list[dict[str, Any]] | None = None,
     chart_packet_dir: Path | None = None,
+    source_manifest: dict[str, Any] | None = None,
+    portfolio_risk_details: dict[str, Any] | None = None,
+    audit_profile: str = "standard",
 ) -> dict[str, Any]:
     market_data = market_data or {}
     portfolio = portfolio or []
@@ -100,18 +106,23 @@ def build_review_packet(
         key=lambda item: (-item["internal_canslim_score"], item["ticker"]),
     )
     shakeout_results = [evaluate_shakeout(record, policy) for record in shakeouts]
+    source_records = list((source_manifest or {}).get("sources") or [])
+    source_records.extend(
+        [
+            _source_record(chart_json, "chart_packet_json"),
+            _source_record(chart_pdf, "chart_packet_pdf"),
+        ]
+    )
     packet = {
         "schema_version": "daily_review_packet_v1",
+        "audit_profile": audit_profile,
         "requested_date": requested_date,
         "session_date": session_date,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "policy_version": policy["policy_version"],
         "calculation_version": policy["calculation_version"],
         "source_timestamps": market_data.get("source_timestamps", {}),
-        "sources": [
-            _source_record(chart_json, "chart_packet_json"),
-            _source_record(chart_pdf, "chart_packet_pdf"),
-        ],
+        "sources": source_records,
         "manifests": market_data.get("manifests", []),
         "market_regime": market_data.get(
             "market_regime",
@@ -126,11 +137,16 @@ def build_review_packet(
             "max_position_risk_pct": policy["portfolio"]["max_position_risk_pct"],
             "max_total_open_risk_pct": policy["portfolio"]["max_total_open_risk_pct"],
             "status": "calculated" if portfolio else "insufficient_evidence",
+            **(portfolio_risk_details or {}),
         },
         "sell_rule_results": position_results,
         "candidate_results": candidate_results,
         "shakeout_results": shakeout_results,
         "chart_verification": _verify_chart_packet(chart_json, chart_pdf, session_date),
+        "input_sets": {
+            "portfolio_tickers": sorted(str(item.get("ticker", "")).upper() for item in portfolio if item.get("ticker")),
+            "candidate_tickers": sorted(str(item.get("ticker", "")).upper() for item in candidates if item.get("ticker")),
+        },
         "validation_evidence": [],
     }
     return freeze_packet(packet)

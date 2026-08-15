@@ -30,14 +30,32 @@ The command writes:
 
 ## Replay Friday 2026-08-14
 
-After generating or locating the verified chart packet for August 14, run:
+The production replay acquires the exact-subject Gmail portfolio JSON and
+MarketSurge PDF, downloads the newest unexpired chart artifact with the exact
+session name, runs the strict-core audit, delivers the report, and records a
+terminal receipt:
+
+```bash
+gh workflow run daily-review.yml --ref main -f session_date=2026-08-14
+```
+
+Monitor it with:
+
+```bash
+gh run watch "$(gh run list --workflow daily-review.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
+```
+
+For an offline replay with already acquired read-only inputs, run:
 
 ```bash
 python -m market_chart_pipeline.daily_review \
   --date 2026-08-14 \
   --session-date 2026-08-14 \
   --mode read-only \
+  --portfolio source-input/portfolio.json \
   --chart-packet-dir output/2026-08-14 \
+  --source-manifest source-input/source-manifest.json \
+  --audit-profile strict-core \
   --output-dir reports/market
 ```
 
@@ -49,4 +67,13 @@ Tunable thresholds live in `config/trading_policy.json` and include max initial 
 
 ## Delivery state
 
-Processed receipts are terminal even when delivery fails. A failed delivery receipt records `delivery.status = FAILED` and the error so scheduled runs do not rebuild the same packet forever or claim success.
+The production workflow runs at 02:30 UTC Tuesday-Saturday, after the prior
+U.S. session's source messages normally arrive. It requires `GMAIL_ADDRESS`
+and `GMAIL_APP_PASSWORD`; `DAILY_REVIEW_RECIPIENT` falls back to
+`CHART_PACKET_RECIPIENT` and then to the sender.
+
+Processed receipts are terminal even when source acquisition, audit, or
+delivery fails. A receipt records the packet hash when one exists, audit
+status, explicit delivery status/error, and `terminal: true`, so the scheduler
+does not rebuild an unchanged session forever or report delivery success when
+SMTP failed.

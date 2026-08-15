@@ -16,6 +16,12 @@ Optional email delivery secrets:
 - `GMAIL_ADDRESS`
 - `GMAIL_APP_PASSWORD`
 - `CHART_PACKET_RECIPIENT` (defaults to `GMAIL_ADDRESS`)
+- `DAILY_REVIEW_RECIPIENT` (defaults to `CHART_PACKET_RECIPIENT`)
+
+`GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are required by the production Daily
+Market & Portfolio Review workflow because it acquires the exact-session
+portfolio snapshot and MarketSurge scan from Gmail before running strict
+validation.
 
 ## Manual run
 
@@ -48,3 +54,8 @@ A ticker is not chart verified when:
 - the packet manifest and generated artifacts do not reconcile.
 
 The quantitative gate is a ranking/rejection aid only. It never declares a stock actionable.
+
+## Deterministic daily review
+
+See [docs/daily-review.md](docs/daily-review.md) for the versioned policy,
+strict source/audit path, local command, and exact workflow replay command.
