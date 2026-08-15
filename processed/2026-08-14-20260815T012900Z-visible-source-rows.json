@@ -1,0 +1,14 @@
+{
+  "manifest": "requests/2026-08-14-20260815T012900Z-visible-source-rows.json",
+  "session_date": "2026-08-14",
+  "workflow_run_id": "31881960038",
+  "workflow_run_attempt": "1",
+  "processed_at": "2026-08-15T11:36:24Z",
+  "delivery": {
+    "status": "FAILED",
+    "error": "Email would be 66.9 MB, above the configured 24 MB safety limit",
+    "artifact_url": "https://github.com/brandennevius/DailyMarketChartPipeline/actions/runs/31881960038/artifacts/9246305728",
+    "step_outcome": "failure",
+    "step_conclusion": "failure"
+  }
+}
