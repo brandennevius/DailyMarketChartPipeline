@@ -7,14 +7,13 @@ on:
         description: Completed US session date (YYYY-MM-DD)
         required: true
         type: string
-      chart_packet_dir:
-        description: Optional chart packet artifact directory in the checkout
-        required: false
-        type: string
   schedule:
-    - cron: '30 22 * * 1-5'
+    # Source snapshots and the MarketSurge scan arrive after the close. This is
+    # 10:30 PM EDT / 9:30 PM EST; exact-session validation still gates the run.
+    - cron: '30 2 * * 2-6'
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -24,7 +23,12 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      DAILY_REVIEW_RECIPIENT: ${{ secrets.DAILY_REVIEW_RECIPIENT }}
+      CHART_PACKET_RECIPIENT: ${{ secrets.CHART_PACKET_RECIPIENT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,23 +46,143 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from datetime import date
-          session = os.environ.get('MANUAL_DATE') or date.today().isoformat()
+          from datetime import date, timedelta
+
+          session = os.environ.get('MANUAL_DATE', '').strip()
+          if not session:
+              day = date.today() - timedelta(days=1)
+              while day.weekday() >= 5:
+                  day -= timedelta(days=1)
+              session = day.isoformat()
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
               out.write(f'session_date={session}\n')
           PY
-      - name: Run deterministic review
+      - name: Check terminal processed state
+        id: processed
+        env:
+          SESSION_DATE: ${{ steps.session.outputs.session_date }}
         run: |
-          python -m market_chart_pipeline.daily_review \
-            --date "${{ steps.session.outputs.session_date }}" \
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          receipt = Path('processed', f'daily-review-{os.environ["SESSION_DATE"]}.json')
+          skip = receipt.exists() and json.loads(receipt.read_text()).get('terminal') is True
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f'skip={str(skip).lower()}\n')
+          PY
+      - name: Acquire exact-session sources
+        id: sources
+        if: steps.processed.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m market_chart_pipeline.source_acquisition \
             --session-date "${{ steps.session.outputs.session_date }}" \
-            --mode read-only \
-            --chart-packet-dir "${{ inputs.chart_packet_dir }}" \
-            --output-dir reports/market
-      - name: Upload review artifacts
+            --output-dir source-input \
+            --repository "${{ github.repository }}" \
+            --outputs-json source-outputs.json
+      - name: Run strict deterministic review
+        id: deterministic
+        if: steps.processed.outputs.skip != 'true' && steps.sources.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          source = json.load(open('source-outputs.json'))
+          session = '${{ steps.session.outputs.session_date }}'
+          subprocess.run([
+              'python', '-m', 'market_chart_pipeline.daily_review',
+              '--date', session,
+              '--session-date', session,
+              '--mode', 'read-only',
+              '--portfolio', source['portfolio'],
+              '--chart-packet-dir', source['chart_packet_dir'],
+              '--source-manifest', source['manifest'],
+              '--audit-profile', 'strict-core',
+              '--output-dir', 'reports/market',
+          ], check=True)
+          PY
+      - name: Deliver validated review
+        id: delivery
+        if: steps.processed.outputs.skip != 'true' && steps.deterministic.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python -m market_chart_pipeline.review_mailer \
+            --session-date "${{ steps.session.outputs.session_date }}" \
+            --output-dir reports/market \
+            --status-json delivery-status.json
+      - name: Deliver fail-closed notice
+        id: failure_notice
+        if: steps.processed.outputs.skip != 'true' && (steps.sources.outcome == 'failure' || steps.deterministic.outcome == 'failure')
+        continue-on-error: true
+        run: |
+          python -m market_chart_pipeline.review_mailer \
+            --session-date "${{ steps.session.outputs.session_date }}" \
+            --output-dir reports/market \
+            --status-json delivery-status.json \
+            --failure-error "source_acquisition=${{ steps.sources.outcome }}; deterministic_audit=${{ steps.deterministic.outcome }}"
+      - name: Record terminal processed state
+        if: always() && steps.processed.outputs.skip != 'true'
+        env:
+          SESSION_DATE: ${{ steps.session.outputs.session_date }}
+          SOURCE_OUTCOME: ${{ steps.sources.outcome }}
+          REVIEW_OUTCOME: ${{ steps.deterministic.outcome }}
+          DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
+          FAILURE_NOTICE_OUTCOME: ${{ steps.failure_notice.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from market_chart_pipeline.delivery_state import write_processed_state
+
+          session = os.environ['SESSION_DATE']
+          packet_path = Path('reports/market') / session / f'{session}-market-review.json'
+          packet = json.loads(packet_path.read_text()) if packet_path.exists() else {}
+          status_path = Path('delivery-status.json')
+          delivery = json.loads(status_path.read_text()) if status_path.exists() else {
+              'status': 'FAILED',
+              'error': 'delivery step did not write delivery-status.json',
+          }
+          delivery.update({
+              'review_delivery_step': os.environ['DELIVERY_OUTCOME'],
+              'failure_notice_step': os.environ['FAILURE_NOTICE_OUTCOME'],
+          })
+          write_processed_state(
+              Path('processed') / f'daily-review-{session}.json',
+              manifest='source-input/source-manifest.json',
+              session_date=session,
+              packet_hash=packet.get('packet_sha256'),
+              audit_status='pass' if os.environ['REVIEW_OUTCOME'] == 'success' else 'failed',
+              delivery=delivery,
+          )
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "processed/daily-review-${{ steps.session.outputs.session_date }}.json"
+          git commit -m "Record daily review state: ${{ steps.session.outputs.session_date }}"
+          git pull --rebase origin main
+          git push
+      - name: Upload source, report, and receipt artifacts
+        if: always() && steps.processed.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: daily-market-review-${{ steps.session.outputs.session_date }}
-          path: reports/market/${{ steps.session.outputs.session_date }}/
-          if-no-files-found: error
+          path: |
+            source-input/source-manifest.json
+            source-outputs.json
+            reports/market/${{ steps.session.outputs.session_date }}/
+            processed/daily-review-${{ steps.session.outputs.session_date }}.json
+            delivery-status.json
+          if-no-files-found: warn
           retention-days: 30
+      - name: Enforce final outcome
+        if: steps.processed.outputs.skip != 'true'
+        env:
+          SOURCE_OUTCOME: ${{ steps.sources.outcome }}
+          REVIEW_OUTCOME: ${{ steps.deterministic.outcome }}
+          DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
+        run: |
+          test "$SOURCE_OUTCOME" = success
+          test "$REVIEW_OUTCOME" = success
+          test "$DELIVERY_OUTCOME" = success
