@@ -7,6 +7,11 @@ on:
         description: Completed US session date (YYYY-MM-DD)
         required: true
         type: string
+      retry_prepacket_failure:
+        description: Explicitly retry only a terminal failure that produced no packet hash
+        required: false
+        default: false
+        type: boolean
   schedule:
     # Source snapshots and the MarketSurge scan arrive after the close. This is
     # 10:30 PM EDT / 9:30 PM EST; exact-session validation still gates the run.
@@ -61,12 +66,18 @@ jobs:
         id: processed
         env:
           SESSION_DATE: ${{ steps.session.outputs.session_date }}
+          RETRY_PREPACKET_FAILURE: ${{ inputs.retry_prepacket_failure }}
         run: |
           python - <<'PY'
           import json, os
           from pathlib import Path
           receipt = Path('processed', f'daily-review-{os.environ["SESSION_DATE"]}.json')
-          skip = receipt.exists() and json.loads(receipt.read_text()).get('terminal') is True
+          state = json.loads(receipt.read_text()) if receipt.exists() else {}
+          skip = state.get('terminal') is True
+          retry = os.environ.get('RETRY_PREPACKET_FAILURE', '').lower() == 'true'
+          retryable = state.get('audit_status') == 'failed' and state.get('packet_hash') is None
+          if retry and retryable:
+              skip = False
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
               out.write(f'skip={str(skip).lower()}\n')
           PY
