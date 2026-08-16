@@ -1,0 +1,14 @@
+{
+  "audit_status": "pass",
+  "delivery": {
+    "error": null,
+    "failure_notice_step": "skipped",
+    "review_delivery_step": "skipped",
+    "status": "NOT_REQUESTED"
+  },
+  "manifest": "source-input/source-manifest.json",
+  "packet_hash": "2d54bfe65277ee1fb2dfbea29b057d9d8540001881f7a8f0dcc0c15306093fa4",
+  "processed_at": "2026-08-16T16:25:05.457543+00:00",
+  "session_date": "2026-08-14",
+  "terminal": true
+}
