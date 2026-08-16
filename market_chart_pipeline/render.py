@@ -202,6 +202,20 @@ def _position_narrative(result: dict[str, Any]) -> str:
         notes.append("The 21-day relative-strength trend is falling.")
     if snap.get("chart_gate_reasons"):
         notes.append("Chart flag: " + "; ".join(snap["chart_gate_reasons"]) + ".")
+    gain_protection = _event(result, "seven_percent_gain_protection")
+    if gain_protection.get("status") == "ACTIVE":
+        floor = gain_protection.get("values", {}).get("protected_loss_floor")
+        notes.append(f"The +7% gain-protection rule is active with a {_money(floor, 2)} loss floor.")
+    peak_trail = _event(result, "peak_drawdown_trail")
+    if peak_trail.get("status") in {"PASS", "TRIGGERED"}:
+        trail = peak_trail.get("values", {}).get("trail_stop_price")
+        notes.append(f"The 11% highest-close trail is {'triggered' if peak_trail.get('status') == 'TRIGGERED' else 'at'} {_money(trail, 2)}.")
+    zone_hold = _event(result, "profit_zone_minimum_hold")
+    if zone_hold:
+        notes.append(
+            "The pivot profit zone is reached; "
+            + ("the eight-week minimum hold remains active." if zone_hold.get("status") == "ACTIVE" else "the minimum hold is satisfied.")
+        )
     earnings = snap.get("earnings_date")
     if earnings:
         notes.append(f"Next verified earnings date: {earnings}.")

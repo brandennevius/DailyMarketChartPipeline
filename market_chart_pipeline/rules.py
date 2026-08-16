@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 ACTION_HOLD = "HOLD"
@@ -29,8 +29,15 @@ def _pct(current: float, base: float) -> float:
     return ((current - base) / base) * 100.0
 
 
-def _days(start: str, end: str) -> int:
-    return (date.fromisoformat(end) - date.fromisoformat(start)).days
+def _trading_days(start: str, end: str) -> int:
+    cursor = date.fromisoformat(start) + timedelta(days=1)
+    finish = date.fromisoformat(end)
+    count = 0
+    while cursor <= finish:
+        if cursor.weekday() < 5:
+            count += 1
+        cursor += timedelta(days=1)
+    return count
 
 
 def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_date: str) -> dict[str, Any]:
@@ -62,6 +69,15 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
     initial_stop = max(stop_candidates)
     initial_risk = entry - initial_stop
     high = position.get("highest_close_since_entry") or position.get("highest_price_since_entry")
+    trailing = policy["trailing"]
+    high_gain_pct = _pct(float(high), entry) if high is not None else None
+    gain_protection_active = bool(
+        high_gain_pct is not None and high_gain_pct >= float(trailing["activation_gain_pct"])
+    )
+    protected_loss_floor = None
+    if gain_protection_active:
+        protected_loss_floor = entry * (1.0 - float(trailing["protected_loss_floor_pct"]) / 100.0)
+        stop_candidates.append(protected_loss_floor)
     break_even_active = bool(
         high is not None
         and initial_risk > 0
@@ -92,6 +108,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
                 max_initial_loss_price=round(loss_limit_price, 4),
                 atr_stop=round(atr_stop, 4) if atr_stop is not None else None,
                 structural_stop=structural_stop,
+                protected_loss_floor=round(protected_loss_floor, 4) if protected_loss_floor is not None else None,
             )
         )
         return {
@@ -113,11 +130,46 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
     )
     if break_even_event:
         events.append(break_even_event)
+    if high is None:
+        events.append(
+            _event(
+                "seven_percent_gain_protection",
+                "INSUFFICIENT_EVIDENCE",
+                1,
+                "Highest close since entry is unavailable",
+            )
+        )
+    elif gain_protection_active:
+        events.append(
+            _event(
+                "seven_percent_gain_protection",
+                "ACTIVE",
+                1,
+                "A 7% advance activated the protected loss floor",
+                highest_close_since_entry=float(high),
+                highest_gain_pct=round(float(high_gain_pct), 2),
+                protected_loss_floor=round(float(protected_loss_floor), 4),
+            )
+        )
+    else:
+        events.append(
+            _event(
+                "seven_percent_gain_protection",
+                "NOT_TRIGGERED",
+                1,
+                "The position has not yet advanced 7% from entry",
+                highest_gain_pct=round(float(high_gain_pct), 2),
+                activation_gain_pct=float(trailing["activation_gain_pct"]),
+            )
+        )
 
     pivot = position.get("pivot_price")
+    pivot_gain = None
+    profit_zone_reached = False
     if pivot is not None:
         pivot_gain = _pct(current, float(pivot))
         zone = policy["profit_zone"]
+        profit_zone_reached = pivot_gain >= float(zone["lower_pct_from_pivot"])
         if pivot_gain >= float(zone["upper_pct_from_pivot"]):
             events.append(_event("profit_zone", "UPPER_ZONE_REACHED", 2, "Price is above the upper profit-zone threshold", gain_from_pivot_pct=round(pivot_gain, 2)))
         elif pivot_gain >= float(zone["lower_pct_from_pivot"]):
@@ -128,13 +180,19 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
         events.append(_event("profit_zone", "INSUFFICIENT_EVIDENCE", 2, "Pivot price is unavailable"))
 
     breakout_date = position.get("breakout_date") or position.get("entry_date")
+    trading_days_held = None
+    weeks_held = None
+    if breakout_date:
+        supplied_days = position.get("trading_days_since_breakout")
+        trading_days_held = int(supplied_days) if supplied_days is not None else _trading_days(str(breakout_date), session_date)
+        weeks_held = trading_days_held / 5.0
     rapid_active = False
     if breakout_date and pivot is not None:
-        trading_days_held = int(position.get("trading_days_since_breakout") or _days(str(breakout_date), session_date))
-        weeks_held = trading_days_held / 5.0
-        pivot_gain = _pct(current, float(pivot))
         rapid = policy["rapid_advance"]
-        if pivot_gain >= float(rapid["gain_pct"]) and trading_days_held <= int(rapid["max_trading_days"]):
+        trigger_days = position.get("trading_days_to_rapid_advance")
+        if trigger_days is None and pivot_gain >= float(rapid["gain_pct"]) and trading_days_held <= int(rapid["max_trading_days"]):
+            trigger_days = trading_days_held
+        if trigger_days is not None and int(trigger_days) <= int(rapid["max_trading_days"]):
             rapid_active = weeks_held < float(rapid["minimum_hold_weeks"])
             events.append(
                 _event(
@@ -142,6 +200,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
                     "ACTIVE" if rapid_active else "SATISFIED",
                     1,
                     "20% advance within three weeks qualifies for the eight-week hold rule",
+                    trading_days_to_20_pct=int(trigger_days),
                     trading_days_since_breakout=trading_days_held,
                     weeks_held=round(weeks_held, 2),
                     gain_from_pivot_pct=round(pivot_gain, 2),
@@ -152,20 +211,45 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
     else:
         events.append(_event("rapid_advance_hold", "INSUFFICIENT_EVIDENCE", 1, "Breakout date or pivot price is unavailable"))
 
-    if high:
+    if profit_zone_reached and weeks_held is not None:
+        minimum_weeks = float(policy["profit_zone"]["minimum_hold_weeks"])
+        events.append(
+            _event(
+                "profit_zone_minimum_hold",
+                "ACTIVE" if weeks_held < minimum_weeks else "SATISFIED",
+                2,
+                "Profit-zone action waits for the configured minimum hold unless a harder rule fires",
+                weeks_held=round(weeks_held, 2),
+                minimum_hold_weeks=minimum_weeks,
+            )
+        )
+
+    trail_triggered = False
+    if high is not None and gain_protection_active:
         drawdown = ((float(high) - current) / float(high)) * 100.0
         threshold = float(policy["trailing"]["peak_drawdown_exit_pct"])
+        trail_stop_price = float(high) * (1.0 - threshold / 100.0)
         status = "TRIGGERED" if drawdown >= threshold else "PASS"
-        events.append(_event("peak_drawdown_trail", status, 1, "Measured decline from highest close since entry", drawdown_pct=round(drawdown, 2), threshold_pct=threshold))
+        trail_triggered = status == "TRIGGERED"
+        events.append(_event("peak_drawdown_trail", status, 1, "Measured decline from highest close since entry", drawdown_pct=round(drawdown, 2), threshold_pct=threshold, trail_stop_price=round(trail_stop_price, 4)))
+    elif high is not None:
+        drawdown = ((float(high) - current) / float(high)) * 100.0
+        events.append(
+            _event(
+                "peak_drawdown_trail",
+                "NOT_ACTIVE",
+                1,
+                "The 11% peak trail activates only after a 7% advance from entry",
+                drawdown_pct=round(drawdown, 2),
+                highest_gain_pct=round(float(high_gain_pct), 2),
+            )
+        )
     else:
         drawdown = None
         events.append(_event("peak_drawdown_trail", "INSUFFICIENT_EVIDENCE", 1, "Highest close since entry is unavailable"))
 
     patience_status = "NOT_EVALUATED"
-    trading_days_held = None
     if breakout_date:
-        trading_days_held = int(position.get("trading_days_since_breakout") or _days(str(breakout_date), session_date))
-        weeks_held = trading_days_held / 5.0
         patience = policy["patience"]
         if weeks_held >= float(patience["slow_leader_patience_weeks"]) and gain_pct < float(
             patience["minimum_gain_pct_for_patience"]
@@ -197,10 +281,13 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
 
     if rapid_active:
         action = ACTION_HOLD
-        rationale = "Rapid-advance eight-week hold is active and no hard exit rule fired."
-    elif drawdown is not None and drawdown >= float(policy["trailing"]["peak_drawdown_exit_pct"]):
-        action = ACTION_REDUCE
-        rationale = "Peak drawdown trail fired after capital-protection checks passed."
+        rationale = "Rapid-advance eight-week hold is active; hard capital protection remains enforced."
+    elif trail_triggered:
+        action = trailing["action"]
+        rationale = "The 11% peak trail fired after the position had activated gain protection."
+    elif profit_zone_reached and weeks_held is not None and weeks_held >= float(policy["profit_zone"]["minimum_hold_weeks"]):
+        action = policy["profit_zone"]["action"]
+        rationale = "The 20%-25% pivot profit zone is active after the minimum eight-week hold."
     elif patience_status == "TRIGGERED":
         action = ACTION_REDUCE
         rationale = "The thirteen-week patience threshold fired without the configured minimum progress."
@@ -227,6 +314,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
                 "setup_criteria_score", "setup_criteria_max", "earnings_date", "sma21", "sma50",
                 "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
                 "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
+                "highest_close_since_entry", "trading_days_since_breakout", "trading_days_to_rapid_advance",
             ]
         },
         "events": events,

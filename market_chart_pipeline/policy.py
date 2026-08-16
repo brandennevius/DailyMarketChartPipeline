@@ -30,4 +30,18 @@ def load_policy(path: Path | None = None) -> dict[str, Any]:
         raise ValidationError(f"Trading policy missing required keys: {missing}")
     if abs(sum(policy["candidate_scoring"].values()) - 1.0) > 0.00001:
         raise ValidationError("Candidate scoring weights must sum to 1.0")
+    trailing = policy["trailing"]
+    for field in ["activation_gain_pct", "protected_loss_floor_pct", "peak_drawdown_exit_pct", "peak_basis", "action"]:
+        if field not in trailing:
+            raise ValidationError(f"Trading policy trailing rule missing required field: {field}")
+    if trailing["peak_basis"] != "highest_close":
+        raise ValidationError("Only highest_close peak trailing is currently supported")
+    if trailing["action"] not in policy["actions"]:
+        raise ValidationError("Trailing action must be in the configured action set")
+    zone = policy["profit_zone"]
+    for field in ["minimum_hold_weeks", "action"]:
+        if field not in zone:
+            raise ValidationError(f"Trading policy profit-zone rule missing required field: {field}")
+    if zone["action"] not in policy["actions"]:
+        raise ValidationError("Profit-zone action must be in the configured action set")
     return policy

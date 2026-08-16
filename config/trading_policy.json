@@ -1,6 +1,6 @@
 {
-  "policy_version": "2026.08.15",
-  "calculation_version": "daily-review-v1",
+  "policy_version": "2026.08.16",
+  "calculation_version": "daily-review-v2",
   "actions": ["HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"],
   "hard_rules": {
     "max_initial_loss_pct": 8.0,
@@ -9,7 +9,9 @@
   },
   "profit_zone": {
     "lower_pct_from_pivot": 20.0,
-    "upper_pct_from_pivot": 25.0
+    "upper_pct_from_pivot": 25.0,
+    "minimum_hold_weeks": 8.0,
+    "action": "REDUCE"
   },
   "rapid_advance": {
     "gain_pct": 20.0,
@@ -17,7 +19,11 @@
     "minimum_hold_weeks": 8.0
   },
   "trailing": {
-    "peak_drawdown_exit_pct": 11.0
+    "activation_gain_pct": 7.0,
+    "protected_loss_floor_pct": 5.0,
+    "peak_drawdown_exit_pct": 11.0,
+    "peak_basis": "highest_close",
+    "action": "REDUCE"
   },
   "patience": {
     "eight_week_hold_weeks": 8.0,

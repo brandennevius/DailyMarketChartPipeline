@@ -213,6 +213,20 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def serialize_price_history(df: pd.DataFrame, limit: int = 500) -> list[dict]:
+    """Keep enough verified daily evidence for position-aware trailing rules."""
+    rows = []
+    for index, row in df.tail(limit).iterrows():
+        rows.append(
+            {
+                "date": index.date().isoformat(),
+                "high": round(float(row["High"]), 6),
+                "close": round(float(row["Close"]), 6),
+            }
+        )
+    return rows
+
+
 def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, feed: str="iex", provenance: dict | None=None) -> dict:
     symbols=normalize_symbols(symbols); output_dir.mkdir(parents=True,exist_ok=True); charts=output_dir/"charts"
     bars=fetch_bars(symbols,session_date,feed); records=[]; errors={}; enrichment_errors={}
@@ -234,7 +248,7 @@ def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, fe
             technical_context=calculate_technical_context(bars[symbol],rs)
             daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"
             render_chart(symbol,bars[symbol],session_date,daily,False,rs); render_chart(symbol,bars[symbol],session_date,weekly,True,rs)
-            records.append({"metrics":asdict(m),"technical_context":technical_context,"fmp":fmp_data,"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat()})
+            records.append({"metrics":asdict(m),"technical_context":technical_context,"fmp":fmp_data,"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat(),"price_history":serialize_price_history(bars[symbol])})
         except Exception as exc: errors[symbol]=str(exc)
     status="COMPLETE" if not errors and not enrichment_errors else "COMPLETE_WITH_WARNINGS"
     payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"enrichment_errors":enrichment_errors,"records":records,"status":status,"chart_data_source":"ALPACA","enrichment_source":"FMP","benchmark":"^GSPC"}

@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from market_chart_pipeline.core import ValidationError, calculate_metrics, normalize_symbols, validate_bars
+from market_chart_pipeline.core import ValidationError, calculate_metrics, normalize_symbols, serialize_price_history, validate_bars
 
 
 def bars(periods=260,end="2026-08-04"):
@@ -19,3 +19,10 @@ def test_metrics_are_computed():
     m=calculate_metrics("TEST",bars(),"2026-08-04")
     assert m.current_price > m.sma50 > m.sma200
     assert m.quantitative_gate in {"CHART_REVIEW","CHART_REVIEW_PRIORITY"}
+
+
+def test_price_history_is_bounded_and_serializable():
+    history = serialize_price_history(bars(260), limit=20)
+    assert len(history) == 20
+    assert set(history[-1]) == {"date", "high", "close"}
+    assert history[-1]["date"] == "2026-08-04"
