@@ -46,6 +46,16 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValidationError("Strict candidate universe does not match the chart source manifest")
         evidence.append({"gate": "strict_core_sources", "status": "pass", "required": sorted(required_sources)})
 
+        missing_sandboxes = [
+            item.get("ticker")
+            for item in packet.get("sell_rule_results", [])
+            if item.get("position_snapshot", {}).get("sell_sandbox_status") != "verified"
+            or not item.get("position_snapshot", {}).get("sell_sandbox_asset", {}).get("sha256")
+        ]
+        if missing_sandboxes:
+            raise ValidationError(f"Strict sell-sandbox chart gate failed: {sorted(missing_sandboxes)}")
+        evidence.append({"gate": "sell_sandbox_charts", "status": "pass"})
+
     allowed_origins = {"scanner", "watchlist", "open_position", None}
     bad_origins = [item for item in packet.get("candidate_results", []) if item.get("origin") not in allowed_origins]
     if bad_origins:

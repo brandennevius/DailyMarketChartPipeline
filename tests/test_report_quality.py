@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
+from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.render import render_markdown, render_pdf
 
 
@@ -120,3 +123,36 @@ def test_report_is_decision_first_and_renders_pdf():
     assert "Validation Evidence" not in markdown
     assert pdf.startswith(b"%PDF")
     assert len(pdf) > 3_000
+
+
+def test_pdf_rejects_tampered_sell_sandbox_asset(tmp_path: Path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "TEST_sell_sandbox.png").write_bytes(b"tampered")
+    packet = {
+        "session_date": SESSION,
+        "policy_version": "test-policy",
+        "packet_sha256": "a" * 64,
+        "audit_profile": "standard",
+        "market_regime": {"classification": "INSUFFICIENT_EVIDENCE"},
+        "market_breadth": {"verified_symbols": 0},
+        "portfolio_risk": {"account_value": 100_000, "normalized_long_position_count": 1},
+        "sell_rule_results": [
+            {
+                "ticker": "TEST",
+                "action": "HOLD",
+                "rationale": "No rule fired.",
+                "gain_pct": 1,
+                "events": [{"rule": "hard_capital_protection", "status": "PASS", "values": {}}],
+                "position_snapshot": {
+                    "sell_sandbox_asset": {"file": "assets/TEST_sell_sandbox.png", "sha256": "bad"},
+                },
+            }
+        ],
+        "candidate_results": [],
+        "chart_verification": {"verified_tickers": [], "requested_tickers": []},
+        "input_sets": {"portfolio_tickers": ["TEST"]},
+    }
+
+    with pytest.raises(ValidationError, match="hash mismatch"):
+        render_pdf(packet, report_dir=tmp_path)

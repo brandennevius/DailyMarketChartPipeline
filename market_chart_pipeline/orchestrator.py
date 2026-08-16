@@ -14,6 +14,7 @@ from .audit import audit_packet
 from .packet import build_review_packet, freeze_packet
 from .policy import load_policy
 from .render import render_markdown, render_pdf
+from .sell_charts import build_sell_sandbox_chart
 from .utils import atomic_write_text, load_json
 
 
@@ -40,6 +41,7 @@ def run_daily_review(
         raise ValueError("Only read-only mode is currently supported")
     resolved_session = session_date or requested_date
     policy = load_policy(policy_path)
+    session_dir = output_dir / resolved_session
     raw_portfolio = _optional_json(portfolio_path, [])
     portfolio_risk_details = None
     if isinstance(raw_portfolio, dict) and raw_portfolio.get("metadata"):
@@ -62,6 +64,19 @@ def run_daily_review(
     market_breadth = derive_market_breadth(chart_payload)
     if chart_payload and chart_dir:
         portfolio = enrich_positions_from_charts(portfolio, chart_payload, chart_dir)
+    for position in portfolio:
+        ticker = str(position.get("ticker") or "UNKNOWN").upper()
+        try:
+            position["sell_sandbox_asset"] = build_sell_sandbox_chart(
+                position,
+                policy,
+                resolved_session,
+                session_dir / "assets" / f"{ticker}_sell_sandbox.png",
+            )
+            position["sell_sandbox_status"] = "verified"
+        except Exception as exc:
+            position["sell_sandbox_status"] = "insufficient_evidence"
+            position["sell_sandbox_error"] = str(exc)
     source_manifest = _optional_json(source_manifest_path, {})
 
     packet = build_review_packet(
@@ -83,7 +98,6 @@ def run_daily_review(
     packet = freeze_packet(packet)
     audit_packet(packet)
 
-    session_dir = output_dir / resolved_session
     json_path = session_dir / f"{resolved_session}-market-review.json"
     md_path = session_dir / f"{resolved_session}-market-review.md"
     pdf_path = session_dir / f"{resolved_session}-market-review.pdf"
@@ -91,7 +105,7 @@ def run_daily_review(
     markdown = render_markdown(packet)
     atomic_write_text(md_path, markdown)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(render_pdf(packet, chart_dir))
+    pdf_path.write_bytes(render_pdf(packet, chart_dir, session_dir))
     return {"packet": packet, "json_path": str(json_path), "markdown_path": str(md_path), "pdf_path": str(pdf_path)}
 
 

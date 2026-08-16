@@ -315,6 +315,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
                 "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
                 "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
                 "highest_close_since_entry", "trading_days_since_breakout", "trading_days_to_rapid_advance",
+                "atr", "atr_at_entry", "atr_current", "sell_sandbox_asset", "sell_sandbox_status", "sell_sandbox_error",
             ]
         },
         "events": events,

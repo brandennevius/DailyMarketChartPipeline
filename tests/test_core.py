@@ -24,5 +24,5 @@ def test_metrics_are_computed():
 def test_price_history_is_bounded_and_serializable():
     history = serialize_price_history(bars(260), limit=20)
     assert len(history) == 20
-    assert set(history[-1]) == {"date", "high", "close"}
+    assert set(history[-1]) == {"date", "open", "high", "low", "close", "volume"}
     assert history[-1]["date"] == "2026-08-04"
