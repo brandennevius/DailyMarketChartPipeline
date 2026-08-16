@@ -28,6 +28,18 @@ The command writes:
 - `reports/market/YYYY-MM-DD/YYYY-MM-DD-market-review.md`
 - `reports/market/YYYY-MM-DD/YYYY-MM-DD-market-review.pdf`
 
+The frozen JSON preserves the portfolio fields used in the report, including
+exposure, P&L, working stops, stop risk, targets, setup grades, R multiples,
+technical context, leadership breadth, and chart-asset hashes. Markdown and
+PDF narrative is derived from that packet. The PDF presents audit hashes and
+known evidence gaps in an appendix rather than mixing them into the decision
+summary.
+
+`market_breadth` is explicitly scoped to the MarketSurge-derived review
+universe. It does not substitute for an O'Neil market-regime determination;
+without index follow-through and distribution-day evidence, the regime remains
+`INSUFFICIENT_EVIDENCE`.
+
 ## Replay Friday 2026-08-14
 
 The production replay acquires the exact-subject Gmail portfolio JSON and

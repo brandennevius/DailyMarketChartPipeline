@@ -59,3 +59,6 @@ The quantitative gate is a ranking/rejection aid only. It never declares a stock
 
 See [docs/daily-review.md](docs/daily-review.md) for the versioned policy,
 strict source/audit path, local command, and exact workflow replay command.
+The review PDF is decision-first: portfolio exposure and risk, an action board,
+per-position stop/target context with current charts, a non-actionable visual
+review queue, selected candidate charts, and a compact evidence appendix.

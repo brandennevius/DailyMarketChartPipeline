@@ -92,6 +92,7 @@ def build_review_packet(
     chart_packet_dir: Path | None = None,
     source_manifest: dict[str, Any] | None = None,
     portfolio_risk_details: dict[str, Any] | None = None,
+    market_breadth: dict[str, Any] | None = None,
     audit_profile: str = "standard",
 ) -> dict[str, Any]:
     market_data = market_data or {}
@@ -132,6 +133,7 @@ def build_review_packet(
                 "evidence": ["No deterministic market-regime input was supplied."],
             },
         ),
+        "market_breadth": market_breadth or {"status": "insufficient_evidence", "verified_symbols": 0},
         "portfolio_risk": {
             "position_count": len(portfolio),
             "max_position_risk_pct": policy["portfolio"]["max_position_risk_pct"],
