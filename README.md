@@ -62,3 +62,6 @@ strict source/audit path, local command, and exact workflow replay command.
 The review PDF is decision-first: portfolio exposure and risk, an action board,
 per-position stop/target context with current charts, a non-actionable visual
 review queue, selected candidate charts, and a compact evidence appendix.
+Each open equity position also receives a hash-locked sell-rule sandbox chart
+that overlays the configured percentage, ATR, trailing, profit-zone, and time
+boundaries on current-session candles.

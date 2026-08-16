@@ -11,7 +11,6 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    HRFlowable,
     Image,
     PageBreak,
     Paragraph,
@@ -20,6 +19,9 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+from .core import ValidationError
+from .utils import sha256_file
 
 
 INK = colors.HexColor("#17202A")
@@ -222,7 +224,7 @@ def _position_narrative(result: dict[str, Any]) -> str:
     return " ".join(notes)
 
 
-def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None) -> bytes:
+def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir: Path | None = None) -> bytes:
     buffer = BytesIO()
     styles = _styles()
     document = SimpleDocTemplate(
@@ -293,15 +295,20 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None) -> bytes:
         if hard:
             values = hard.get("values", {})
             story.append(_p(f"Capital protection: {hard.get('status')} | effective policy stop {_money(values.get('effective_stop'), 2)} | working stop {_money(snap.get('stop_price'), 2)}", styles["small"]))
+        sandbox = snap.get("sell_sandbox_asset") or {}
+        sandbox_path = report_dir / sandbox.get("file", "") if report_dir and sandbox.get("file") else None
         asset = snap.get("daily_chart_asset") or {}
-        chart_path = chart_dir / asset.get("file", "") if chart_dir and asset.get("file") else None
+        daily_path = chart_dir / asset.get("file", "") if chart_dir and asset.get("file") else None
+        chart_path = sandbox_path if sandbox_path and sandbox_path.exists() else daily_path
         if chart_path and chart_path.exists():
-            image = Image(str(chart_path), width=6.75 * inch, height=2.35 * inch, kind="proportional")
-            story.extend([Spacer(1, 4), image, _p(f"{result['ticker']} daily chart through {session}. Chart asset is hash-locked in the review packet.", styles["small"])])
-        if (index + 1) % 2 == 0 and index < len(results) - 1:
+            expected_hash = sandbox.get("sha256") if sandbox_path and chart_path == sandbox_path else asset.get("sha256")
+            if expected_hash and sha256_file(chart_path) != expected_hash:
+                raise ValidationError(f"{result['ticker']}: report chart asset hash mismatch")
+            image = Image(str(chart_path), width=6.75 * inch, height=3.75 * inch, kind="proportional")
+            chart_label = "sell-rule sandbox" if sandbox_path and chart_path == sandbox_path else "daily chart"
+            story.extend([Spacer(1, 4), image, _p(f"{result['ticker']} {chart_label} through {session}. Chart asset is hash-locked in the review packet.", styles["small"])])
+        if index < len(results) - 1:
             story.append(PageBreak())
-        elif index < len(results) - 1:
-            story.extend([Spacer(1, 8), HRFlowable(width="100%", thickness=0.5, color=LINE), Spacer(1, 5)])
 
     story.append(PageBreak())
     story.append(_p("Visual Review Queue", styles["title"]))
@@ -354,6 +361,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None) -> bytes:
     evidence_lines = [
         f"Portfolio snapshot matched the {session} session and contained current closing prices and broker working stops.",
         f"{verified_count} of {requested_count} requested symbols had current-session daily and weekly chart records.",
+        f"{sum(1 for item in results if item.get('position_snapshot', {}).get('sell_sandbox_status') == 'verified')} of {len(results)} open long positions had hash-verified sell-rule sandbox charts.",
         "Hard capital-protection rules were evaluated before trailing, patience, profit-zone, and candidate signals.",
         "The canonical packet was audited and hash-frozen before Markdown and PDF rendering.",
     ]
@@ -362,10 +370,13 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None) -> bytes:
     story.append(_p("Known evidence gaps", styles["h1"]))
     gaps = [
         "No index follow-through-day or distribution-day series was supplied, so the O'Neil market regime remains unclassified.",
-        "Portfolio records do not include verified numeric pivots or highest closes since entry; profit-zone, rapid-advance, and peak-drawdown rules remain unavailable where those fields are required.",
-        "The chart engine identifies candidate resistance for visual review but deliberately does not promote it to a verified pivot.",
         "Shakeout/re-entry logic is implemented, but no active shakeout records were supplied for this session.",
     ]
+    if any(_event(item, "profit_zone").get("status") == "INSUFFICIENT_EVIDENCE" for item in results):
+        gaps.append("One or more portfolio positions lack a verified numeric pivot; profit-zone and rapid-advance rules remain unavailable for those positions.")
+    if any(_event(item, "peak_drawdown_trail").get("status") == "INSUFFICIENT_EVIDENCE" for item in results):
+        gaps.append("One or more positions lack verified highest-close history, so their gain-protection trail remains unavailable.")
+    gaps.append("The chart engine identifies candidate resistance for visual review but deliberately does not promote it to a verified pivot.")
     for line in gaps:
         story.append(_p(f"• {line}", styles["body"]))
     story.append(_p("Audit identity", styles["h1"]))

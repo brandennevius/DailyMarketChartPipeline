@@ -99,10 +99,36 @@ The transcript-derived sell hierarchy is deterministic:
 5. At thirteen weeks, inadequate progress can produce `REDUCE` under the
    patience rule.
 
-Future chart packets retain bounded daily high/close history so the review can
+Future chart packets retain bounded daily OHLCV history so the review can
 derive highest close, trading days held, and the first day a position reached
 20%. Older packets without that history remain explicitly
 `INSUFFICIENT_EVIDENCE` for those calculations.
+
+## Sell-rule sandbox charts
+
+The orchestrator creates one `assets/TICKER_sell_sandbox.png` for every open
+long equity position before freezing the packet. Each asset and its calculated
+levels are recorded with a SHA-256 hash in the corresponding position result.
+Strict-core validation fails when any reported position lacks a verified
+sandbox chart.
+
+The chart overlays:
+
+- actual purchase price and broker working stop;
+- the configured 5%-8% loss zone from purchase price;
+- the 2 ATR initial-stop reference using ATR measured at entry when history is
+  available;
+- the +7% activated protection floor;
+- the stepped 11% highest-close trail;
+- the 20%-25% profit zone only when the pivot is verified;
+- the eight- and thirteen-week trading-day boundaries; and
+- the rapid-advance hold window when its trigger is verified.
+
+The policy intentionally remains hybrid. ATR adapts the initial stop to normal
+volatility, while the fixed percentage cap limits portfolio damage and the
+pivot/time rules preserve their CANSLIM meaning. The engine uses the tighter
+applicable hard boundary; it does not replace the fixed rules with ATR or draw
+an unverified pivot.
 
 ## Delivery state
 

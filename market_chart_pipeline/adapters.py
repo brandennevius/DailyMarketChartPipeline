@@ -66,6 +66,21 @@ def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) ->
     return positions, portfolio_risk
 
 
+def _atr_at_entry(history: list[dict[str, Any]], entry_date: str, periods: int = 14) -> float | None:
+    eligible = [row for row in history if row.get("date") and row["date"] <= entry_date]
+    if len(eligible) < periods + 1:
+        return None
+    true_ranges = []
+    for previous, current in zip(eligible, eligible[1:]):
+        if any(current.get(field) is None for field in ["high", "low"]) or previous.get("close") is None:
+            return None
+        high = float(current["high"])
+        low = float(current["low"])
+        previous_close = float(previous["close"])
+        true_ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+    return round(sum(true_ranges[-periods:]) / periods, 6)
+
+
 def enrich_positions_from_charts(
     positions: list[dict[str, Any]], chart_payload: dict[str, Any], chart_dir: Path
 ) -> list[dict[str, Any]]:
@@ -90,9 +105,10 @@ def enrich_positions_from_charts(
         volume = technical.get("volume") or {}
         relative = technical.get("relative_strength") or {}
         entry_date = str(position.get("entry_date") or "")
+        full_history = record.get("price_history") or []
         position_history = [
             row
-            for row in record.get("price_history") or []
+            for row in full_history
             if row.get("date") and row["date"] >= entry_date
         ] if entry_date else []
         closes = [float(row["close"]) for row in position_history if row.get("close") is not None]
@@ -108,9 +124,13 @@ def enrich_positions_from_charts(
             )
             if first_rapid_index is not None:
                 position["trading_days_to_rapid_advance"] = first_rapid_index
+        atr_at_entry = _atr_at_entry(full_history, entry_date) if entry_date else None
+        position["price_history"] = full_history
+        position["atr_at_entry"] = atr_at_entry
         position.update(
             {
-                "atr": position.get("atr") or metrics.get("atr14"),
+                "atr_current": metrics.get("atr14"),
+                "atr": atr_at_entry or position.get("atr") or metrics.get("atr14"),
                 "earnings_date": position.get("earnings_date") or earnings.get("earnings_date"),
                 "company_name": profile.get("company_name"),
                 "sector": profile.get("sector"),

@@ -1,6 +1,6 @@
 {
-  "policy_version": "2026.08.16",
-  "calculation_version": "daily-review-v2",
+  "policy_version": "2026.08.16.1",
+  "calculation_version": "daily-review-v3",
   "actions": ["HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"],
   "hard_rules": {
     "max_initial_loss_pct": 8.0,

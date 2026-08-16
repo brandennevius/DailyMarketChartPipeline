@@ -220,8 +220,11 @@ def serialize_price_history(df: pd.DataFrame, limit: int = 500) -> list[dict]:
         rows.append(
             {
                 "date": index.date().isoformat(),
+                "open": round(float(row["Open"]), 6),
                 "high": round(float(row["High"]), 6),
+                "low": round(float(row["Low"]), 6),
                 "close": round(float(row["Close"]), 6),
+                "volume": round(float(row["Volume"]), 6),
             }
         )
     return rows

@@ -3,6 +3,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
+import pandas as pd
 
 from market_chart_pipeline.adapters import derive_candidates_from_chart, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
@@ -11,6 +12,21 @@ from market_chart_pipeline.utils import sha256_file
 
 
 SESSION = "2026-08-14"
+
+
+def _price_history():
+    dates = pd.bdate_range(end=SESSION, periods=80)
+    return [
+        {
+            "date": day.date().isoformat(),
+            "open": 90 + index * 0.24,
+            "high": 91 + index * 0.24,
+            "low": 89 + index * 0.24,
+            "close": 90.5 + index * 0.24,
+            "volume": 1_000_000 + index * 1_000,
+        }
+        for index, day in enumerate(dates)
+    ]
 
 
 def _snapshot():
@@ -64,6 +80,7 @@ def _chart_payload(pdf_hash):
                 "latest_bar_date": SESSION,
                 "daily_chart": "daily.png",
                 "weekly_chart": "weekly.png",
+                "price_history": _price_history(),
             }
         ],
     }
@@ -120,6 +137,10 @@ def test_strict_core_run_checks_sources_hashes_and_set_relationships(tmp_path):
     assert "set_relationships" in gates
     assert {item["ticker"] for item in result["packet"]["candidate_results"]} == {"MSFT", "MISS"}
     assert result["packet"]["sell_rule_results"][0]["ticker"] == "MSFT"
+    assert "sell_sandbox_charts" in gates
+    sandbox = result["packet"]["sell_rule_results"][0]["position_snapshot"]["sell_sandbox_asset"]
+    assert sandbox["status"] == "verified"
+    assert sandbox["sha256"]
 
 
 def test_strict_core_run_rejects_tampered_source(tmp_path):
