@@ -1,0 +1,13 @@
+{
+  "manifest": "requests/2026-08-14-20260815T012900Z-visible-source-rows.json",
+  "session_date": "2026-08-14",
+  "workflow_run_id": "31957868473",
+  "workflow_run_attempt": "1",
+  "processed_at": "2026-08-16T16:20:12.384133+00:00",
+  "delivery": {
+    "status": "NOT_REQUESTED",
+    "error": null,
+    "step_outcome": "skipped",
+    "step_conclusion": "skipped"
+  }
+}
