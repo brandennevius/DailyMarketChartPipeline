@@ -63,6 +63,26 @@ Monitor it with:
 gh run watch "$(gh run list --workflow daily-review.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
 ```
 
+To validate a new policy against a terminal historical session, first rebuild
+the original chart manifest with current code and no delivery, then run a
+non-delivery policy replay:
+
+```bash
+gh workflow run chart-packet.yml --ref main \
+  -f manifest_path=requests/2026-08-14-20260815T012900Z-visible-source-rows.json \
+  -f replay_processed_manifest=true \
+  -f dry_run=true
+
+gh workflow run daily-review.yml --ref main \
+  -f session_date=2026-08-14 \
+  -f policy_replay=true \
+  -f dry_run=true
+```
+
+Replays write separate receipts under `processed/replays/`; they never replace
+the original terminal receipt. A dry run records delivery as `NOT_REQUESTED`
+and uploads its artifacts without sending email.
+
 For an offline replay with already acquired read-only inputs, run:
 
 ```bash

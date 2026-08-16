@@ -12,6 +12,16 @@ on:
         required: false
         default: false
         type: boolean
+      policy_replay:
+        description: Rebuild a terminal session with current policy without replacing its receipt
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Build and upload the review without email delivery
+        required: false
+        default: false
+        type: boolean
   schedule:
     # Source snapshots and the MarketSurge scan arrive after the close. This is
     # 10:30 PM EDT / 9:30 PM EST; exact-session validation still gates the run.
@@ -67,6 +77,7 @@ jobs:
         env:
           SESSION_DATE: ${{ steps.session.outputs.session_date }}
           RETRY_PREPACKET_FAILURE: ${{ inputs.retry_prepacket_failure }}
+          POLICY_REPLAY: ${{ inputs.policy_replay }}
         run: |
           python - <<'PY'
           import json, os
@@ -75,8 +86,11 @@ jobs:
           state = json.loads(receipt.read_text()) if receipt.exists() else {}
           skip = state.get('terminal') is True
           retry = os.environ.get('RETRY_PREPACKET_FAILURE', '').lower() == 'true'
+          policy_replay = os.environ.get('POLICY_REPLAY', '').lower() == 'true'
           retryable = state.get('audit_status') == 'failed' and state.get('packet_hash') is None
           if retry and retryable:
+              skip = False
+          if policy_replay:
               skip = False
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
               out.write(f'skip={str(skip).lower()}\n')
@@ -116,7 +130,7 @@ jobs:
           PY
       - name: Deliver validated review
         id: delivery
-        if: steps.processed.outputs.skip != 'true' && steps.deterministic.outcome == 'success'
+        if: steps.processed.outputs.skip != 'true' && steps.deterministic.outcome == 'success' && inputs.dry_run != true
         continue-on-error: true
         run: |
           python -m market_chart_pipeline.review_mailer \
@@ -125,7 +139,7 @@ jobs:
             --status-json delivery-status.json
       - name: Deliver fail-closed notice
         id: failure_notice
-        if: steps.processed.outputs.skip != 'true' && (steps.sources.outcome == 'failure' || steps.deterministic.outcome == 'failure')
+        if: steps.processed.outputs.skip != 'true' && inputs.dry_run != true && (steps.sources.outcome == 'failure' || steps.deterministic.outcome == 'failure')
         continue-on-error: true
         run: |
           python -m market_chart_pipeline.review_mailer \
@@ -134,9 +148,13 @@ jobs:
             --status-json delivery-status.json \
             --failure-error "source_acquisition=${{ steps.sources.outcome }}; deterministic_audit=${{ steps.deterministic.outcome }}"
       - name: Record terminal processed state
+        id: state
         if: always() && steps.processed.outputs.skip != 'true'
         env:
           SESSION_DATE: ${{ steps.session.outputs.session_date }}
+          POLICY_REPLAY: ${{ inputs.policy_replay }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RUN_ID: ${{ github.run_id }}
           SOURCE_OUTCOME: ${{ steps.sources.outcome }}
           REVIEW_OUTCOME: ${{ steps.deterministic.outcome }}
           DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
@@ -151,26 +169,38 @@ jobs:
           packet_path = Path('reports/market') / session / f'{session}-market-review.json'
           packet = json.loads(packet_path.read_text()) if packet_path.exists() else {}
           status_path = Path('delivery-status.json')
-          delivery = json.loads(status_path.read_text()) if status_path.exists() else {
-              'status': 'FAILED',
-              'error': 'delivery step did not write delivery-status.json',
-          }
+          if status_path.exists():
+              delivery = json.loads(status_path.read_text())
+          elif os.environ.get('DRY_RUN', '').lower() == 'true':
+              delivery = {'status': 'NOT_REQUESTED', 'error': None}
+          else:
+              delivery = {
+                  'status': 'FAILED',
+                  'error': 'delivery step did not write delivery-status.json',
+              }
           delivery.update({
               'review_delivery_step': os.environ['DELIVERY_OUTCOME'],
               'failure_notice_step': os.environ['FAILURE_NOTICE_OUTCOME'],
           })
+          if os.environ.get('POLICY_REPLAY', '').lower() == 'true':
+              receipt = Path('processed', 'replays', f'daily-review-{session}-replay-{os.environ["RUN_ID"]}.json')
+          else:
+              receipt = Path('processed') / f'daily-review-{session}.json'
           write_processed_state(
-              Path('processed') / f'daily-review-{session}.json',
+              receipt,
               manifest='source-input/source-manifest.json',
               session_date=session,
               packet_hash=packet.get('packet_sha256'),
               audit_status='pass' if os.environ['REVIEW_OUTCOME'] == 'success' else 'failed',
               delivery=delivery,
           )
+          Path('processed-state-path.txt').write_text(receipt.as_posix())
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f'receipt={receipt.as_posix()}\n')
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "processed/daily-review-${{ steps.session.outputs.session_date }}.json"
+          git add "$(cat processed-state-path.txt)"
           git commit -m "Record daily review state: ${{ steps.session.outputs.session_date }}"
           git pull --rebase origin main
           git push
@@ -183,7 +213,7 @@ jobs:
             source-input/source-manifest.json
             source-outputs.json
             reports/market/${{ steps.session.outputs.session_date }}/
-            processed/daily-review-${{ steps.session.outputs.session_date }}.json
+            ${{ steps.state.outputs.receipt }}
             delivery-status.json
           if-no-files-found: warn
           retention-days: 30
@@ -193,7 +223,8 @@ jobs:
           SOURCE_OUTCOME: ${{ steps.sources.outcome }}
           REVIEW_OUTCOME: ${{ steps.deterministic.outcome }}
           DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           test "$SOURCE_OUTCOME" = success
           test "$REVIEW_OUTCOME" = success
-          test "$DELIVERY_OUTCOME" = success
+          if [ "$DRY_RUN" != true ]; then test "$DELIVERY_OUTCOME" = success; fi

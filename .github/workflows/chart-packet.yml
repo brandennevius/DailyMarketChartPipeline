@@ -21,6 +21,16 @@ on:
         default: iex
         type: choice
         options: [iex, sip]
+      replay_processed_manifest:
+        description: Rebuild an already processed manifest without replacing its receipt
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Build and upload the packet without email delivery
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -59,10 +69,14 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
       - name: Verify required secrets
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           python - <<'PY'
           import os
-          required = ['ALPACA_API_KEY','ALPACA_API_SECRET','FMP_API_KEY','GMAIL_ADDRESS','GMAIL_APP_PASSWORD','CHART_PACKET_RECIPIENT']
+          required = ['ALPACA_API_KEY','ALPACA_API_SECRET','FMP_API_KEY']
+          if os.environ.get('DRY_RUN', '').lower() != 'true':
+              required += ['GMAIL_ADDRESS','GMAIL_APP_PASSWORD','CHART_PACKET_RECIPIENT']
           missing = [name for name in required if not os.getenv(name)]
           if missing:
               raise SystemExit(f'Missing required secrets: {missing}')
@@ -75,6 +89,8 @@ jobs:
           MANUAL_DATE: ${{ inputs.session_date }}
           MANUAL_TICKERS: ${{ inputs.tickers }}
           MANUAL_FEED: ${{ inputs.feed }}
+          FORCE_REPLAY: ${{ inputs.replay_processed_manifest }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
           import json, os, subprocess
@@ -98,8 +114,14 @@ jobs:
           def manifest_outputs(manifest: Path):
               request = validate_manifest(manifest)
               receipt = receipt_for(manifest)
-              if receipt.exists():
+              force_replay = os.environ.get('FORCE_REPLAY', '').lower() == 'true'
+              if receipt.exists() and not force_replay:
                   return ['skip=true', 'reason=request already processed']
+              if receipt.exists() and force_replay:
+                  receipt = Path(
+                      'processed', 'replays',
+                      f'{manifest.stem}-replay-{os.environ["RUN_ID"]}.json',
+                  )
               return [
                   'skip=false',
                   'mode=manifest',
@@ -195,7 +217,7 @@ jobs:
           retention-days: 30
       - name: Email packet to Gmail
         id: delivery
-        if: steps.request.outputs.skip != 'true'
+        if: steps.request.outputs.skip != 'true' && inputs.dry_run != true
         continue-on-error: true
         run: |
           python -m market_chart_pipeline.mailer \
@@ -222,6 +244,11 @@ jobs:
           status_path = Path('delivery-status.json')
           if status_path.exists():
               delivery = json.loads(status_path.read_text(encoding='utf-8'))
+          elif os.environ['DELIVERY_OUTCOME'] == 'skipped':
+              delivery = {
+                  'status': 'NOT_REQUESTED',
+                  'error': None,
+              }
           else:
               delivery = {
                   'status': 'FAILED',
@@ -247,5 +274,5 @@ jobs:
           git commit -m "Mark chart request processed: ${{ steps.request.outputs.manifest }}"
           git push
       - name: Fail if delivery failed
-        if: steps.request.outputs.skip != 'true' && steps.delivery.outcome == 'failure'
+        if: steps.request.outputs.skip != 'true' && inputs.dry_run != true && steps.delivery.outcome == 'failure'
         run: exit 1
