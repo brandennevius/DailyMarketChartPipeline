@@ -66,6 +66,67 @@ def test_peak_drawdown_after_stop_passes_reduces_not_exits():
     assert any(event["rule"] == "peak_drawdown_trail" and event["status"] == "TRIGGERED" for event in result["events"])
 
 
+def test_seven_percent_advance_activates_five_percent_loss_floor():
+    policy = load_policy()
+    result = evaluate_position(
+        {
+            "ticker": "TEST",
+            "entry_price": 100,
+            "current_price": 94.9,
+            "highest_close_since_entry": 107.5,
+            "entry_date": "2026-08-03",
+        },
+        policy,
+        "2026-08-14",
+    )
+
+    assert result["action"] == "EXIT"
+    hard = result["events"][0]
+    assert hard["rule"] == "hard_capital_protection"
+    assert hard["values"]["protected_loss_floor"] == 95.0
+
+
+def test_profit_zone_reduces_only_after_minimum_hold():
+    policy = load_policy()
+    common = {
+        "ticker": "TEST",
+        "entry_price": 100,
+        "current_price": 124,
+        "pivot_price": 100,
+        "highest_close_since_entry": 125,
+        "entry_date": "2026-06-01",
+    }
+
+    early = evaluate_position({**common, "trading_days_since_breakout": 30}, policy, "2026-08-14")
+    mature = evaluate_position({**common, "trading_days_since_breakout": 40}, policy, "2026-08-14")
+
+    assert early["action"] == "HOLD"
+    assert any(event["rule"] == "profit_zone_minimum_hold" and event["status"] == "ACTIVE" for event in early["events"])
+    assert mature["action"] == "REDUCE"
+    assert "profit zone" in mature["rationale"]
+
+
+def test_rapid_advance_trigger_persists_until_eight_weeks():
+    policy = load_policy()
+    position = {
+        "ticker": "TEST",
+        "entry_price": 100,
+        "current_price": 124,
+        "pivot_price": 100,
+        "highest_close_since_entry": 125,
+        "entry_date": "2026-06-01",
+        "trading_days_to_rapid_advance": 10,
+    }
+
+    active = evaluate_position({**position, "trading_days_since_breakout": 30}, policy, "2026-08-14")
+    finished = evaluate_position({**position, "trading_days_since_breakout": 40}, policy, "2026-08-14")
+
+    assert active["action"] == "HOLD"
+    assert any(event["rule"] == "rapid_advance_hold" and event["status"] == "ACTIVE" for event in active["events"])
+    assert finished["action"] == "REDUCE"
+    assert any(event["rule"] == "rapid_advance_hold" and event["status"] == "SATISFIED" for event in finished["events"])
+
+
 def test_shakeout_reentry_requires_reclaim_and_volume():
     policy = load_policy()
     result = evaluate_shakeout(

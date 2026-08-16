@@ -89,6 +89,25 @@ def enrich_positions_from_charts(
         earnings = fmp.get("earnings") or {}
         volume = technical.get("volume") or {}
         relative = technical.get("relative_strength") or {}
+        entry_date = str(position.get("entry_date") or "")
+        position_history = [
+            row
+            for row in record.get("price_history") or []
+            if row.get("date") and row["date"] >= entry_date
+        ] if entry_date else []
+        closes = [float(row["close"]) for row in position_history if row.get("close") is not None]
+        if closes:
+            position["highest_close_since_entry"] = max(closes)
+            position["trading_days_since_breakout"] = max(0, len(closes) - 1)
+        pivot = position.get("pivot_price")
+        if pivot and position_history:
+            threshold = float(pivot) * 1.20
+            first_rapid_index = next(
+                (index for index, row in enumerate(position_history) if float(row.get("close") or 0) >= threshold),
+                None,
+            )
+            if first_rapid_index is not None:
+                position["trading_days_to_rapid_advance"] = first_rapid_index
         position.update(
             {
                 "atr": position.get("atr") or metrics.get("atr14"),

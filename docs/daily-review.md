@@ -83,6 +83,27 @@ Add `--portfolio`, `--candidates`, `--shakeouts`, and `--market-data` when those
 
 Tunable thresholds live in `config/trading_policy.json` and include max initial loss, 2 ATR stop policy, rapid advance, profit zone, peak drawdown, patience, portfolio risk, candidate scoring, and shakeout/re-entry thresholds.
 
+The transcript-derived sell hierarchy is deterministic:
+
+1. Hard capital protection uses the tighter of the purchase-price loss limit,
+   structural stop, 2 ATR initial stop, activated gain-protection floor, and
+   configured break-even protection.
+2. After the highest close is at least 7% above entry, the loss floor tightens
+   to 5% below the actual purchase price and an 11% highest-close trail begins
+   ratcheting upward.
+3. A 20%-25% advance from a verified pivot produces `REDUCE` only after the
+   configured eight-week minimum hold.
+4. Reaching 20% within 15 trading days activates the eight-week rapid-advance
+   hold. It suspends soft profit/trailing actions, never hard capital
+   protection.
+5. At thirteen weeks, inadequate progress can produce `REDUCE` under the
+   patience rule.
+
+Future chart packets retain bounded daily high/close history so the review can
+derive highest close, trading days held, and the first day a position reached
+20%. Older packets without that history remain explicitly
+`INSUFFICIENT_EVIDENCE` for those calculations.
+
 ## Delivery state
 
 The production workflow runs at 02:30 UTC Tuesday-Saturday, after the prior

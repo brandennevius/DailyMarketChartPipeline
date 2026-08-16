@@ -1,4 +1,6 @@
-from market_chart_pipeline.adapters import derive_market_breadth, normalize_portfolio_snapshot
+from pathlib import Path
+
+from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
 from market_chart_pipeline.render import render_markdown, render_pdf
 
 
@@ -71,6 +73,30 @@ def test_market_breadth_is_labeled_partial_and_reconciles():
     assert breadth["above_21d_pct"] == 50.0
     assert breadth["above_200d_pct"] == 100.0
     assert breadth["chart_review_priority_count"] == 1
+
+
+def test_chart_history_supplies_position_trailing_evidence(tmp_path: Path):
+    positions = [{"ticker": "MSFT", "entry_price": 100, "entry_date": "2026-08-10", "pivot_price": 100}]
+    payload = {
+        "records": [
+            {
+                "metrics": {"ticker": "MSFT"},
+                "technical_context": {},
+                "fmp": {},
+                "price_history": [
+                    {"date": "2026-08-07", "close": 99, "high": 100},
+                    {"date": "2026-08-10", "close": 100, "high": 101},
+                    {"date": "2026-08-11", "close": 121, "high": 122},
+                    {"date": "2026-08-12", "close": 119, "high": 121},
+                ],
+            }
+        ]
+    }
+
+    enriched = enrich_positions_from_charts(positions, payload, tmp_path)
+    assert enriched[0]["highest_close_since_entry"] == 121
+    assert enriched[0]["trading_days_since_breakout"] == 2
+    assert enriched[0]["trading_days_to_rapid_advance"] == 1
 
 
 def test_report_is_decision_first_and_renders_pdf():
