@@ -218,6 +218,17 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
         "action": action,
         "rationale": rationale,
         "gain_pct": round(gain_pct, 2),
+        "position_snapshot": {
+            key: position.get(key)
+            for key in [
+                "company_name", "sector", "entry_price", "entry_date", "current_price", "shares",
+                "market_value", "position_weight_pct", "unrealized_pnl", "open_r_multiple",
+                "stop_price", "remaining_risk_to_stop_dollars", "take_profit", "setup", "grade",
+                "setup_criteria_score", "setup_criteria_max", "earnings_date", "sma21", "sma50",
+                "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
+                "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
+            ]
+        },
         "events": events,
     }
 
@@ -284,6 +295,16 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
         "classification": classification,
         "action": action,
         "rationale": rationale,
+        "snapshot": {
+            key: candidate.get(key)
+            for key in [
+                "company_name", "sector", "current_price", "candidate_resistance",
+                "candidate_resistance_distance_pct", "pct_from_52w_high", "relative_volume",
+                "average_dollar_volume", "quantitative_gate", "gate_reasons", "rs_trend",
+                "earnings_date", "source_labels",
+                "daily_chart_asset",
+            ]
+        },
         "events": [
             _event(
                 "candidate_classification",

@@ -4,7 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-from .adapters import derive_candidates_from_chart, normalize_portfolio_snapshot
+from .adapters import (
+    derive_candidates_from_chart,
+    derive_market_breadth,
+    enrich_positions_from_charts,
+    normalize_portfolio_snapshot,
+)
 from .audit import audit_packet
 from .packet import build_review_packet, freeze_packet
 from .policy import load_policy
@@ -52,8 +57,11 @@ def run_daily_review(
             chart_payload = load_json(chart_json)
     candidates = _optional_json(candidates_path, None)
     if candidates is None and chart_payload:
-        candidates = derive_candidates_from_chart(chart_payload)
+        candidates = derive_candidates_from_chart(chart_payload, chart_dir)
     candidates = candidates or []
+    market_breadth = derive_market_breadth(chart_payload)
+    if chart_payload and chart_dir:
+        portfolio = enrich_positions_from_charts(portfolio, chart_payload, chart_dir)
     source_manifest = _optional_json(source_manifest_path, {})
 
     packet = build_review_packet(
@@ -67,6 +75,7 @@ def run_daily_review(
         chart_packet_dir=chart_dir,
         source_manifest=source_manifest,
         portfolio_risk_details=portfolio_risk_details,
+        market_breadth=market_breadth,
         audit_profile=audit_profile,
     )
     evidence = audit_packet(packet)
@@ -82,7 +91,7 @@ def run_daily_review(
     markdown = render_markdown(packet)
     atomic_write_text(md_path, markdown)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_path.write_bytes(render_pdf(markdown))
+    pdf_path.write_bytes(render_pdf(packet, chart_dir))
     return {"packet": packet, "json_path": str(json_path), "markdown_path": str(md_path), "pdf_path": str(pdf_path)}
 
 
