@@ -162,3 +162,59 @@ delivery fails. A receipt records the packet hash when one exists, audit
 status, explicit delivery status/error, and `terminal: true`, so the scheduler
 does not rebuild an unchanged session forever or report delivery success when
 SMTP failed.
+
+## TradingDashboard-triggered run
+
+The dashboard can dispatch this same workflow without Gmail:
+
+```bash
+gh workflow run daily-review.yml --ref main \
+  -f review_run_id=<exact-run-id> \
+  -f session_date=YYYY-MM-DD \
+  -f attempt=1 \
+  -f marketsurge_pdf_sha256=<sha256> \
+  -f snapshot_json_sha256=<sha256> \
+  -f snapshot_markdown_sha256=<sha256> \
+  -f worker_input_url=<https-url> \
+  -f worker_callback_url=<https-url>
+```
+
+`DASHBOARD_WORKER_SECRET` is configured as a GitHub Actions secret, never as a
+public dispatch input. `DASHBOARD_BASE_URL` is a GitHub Actions variable set to
+the canonical dashboard origin. The worker rejects every dispatched endpoint
+or signed source URL outside that origin before presenting the secret. It sends
+the secret only to the allowlisted `worker_input_url`, together with the
+attempt and all three source hashes.
+That private response returns same-origin signed source URLs and a short-lived
+callback token. The response and token must never be printed.
+
+The worker independently verifies every downloaded SHA-256, checks the PDF
+header and page count, and then performs local OCR. OCR output with an unknown
+section, low-confidence ticker, empty page, or displayed-row count mismatch
+returns `OCR_REVIEW_REQUIRED`; it never enters the chart universe silently.
+Dashboard corrections retain the same frozen source hashes and are admitted
+only on a new correlated attempt. Terminal receipts are keyed by both run ID
+and attempt, so a permitted retry cannot erase or be blocked by the prior
+attempt's receipt.
+
+On a verified manifest, the same job builds the chart packet, runs strict-core
+review/audit, and registers the frozen JSON, Markdown, and PDF through a
+`RESULTS_REGISTERED` multipart callback. The callback includes exact artifact
+sizes and SHA-256 values; the JSON artifact hash is distinct from the canonical
+packet-body hash and both are retained as evidence. The dashboard deletes the
+temporary sources only after strict registration succeeds. The worker then
+emails the already-generated artifacts and reports `DELIVERY_STATUS` as `SENT`
+or `FAILED`; delivery failure never rebuilds the packet.
+
+Worker API contract:
+
+- `worker-input` requires `Authorization: Bearer $DASHBOARD_WORKER_SECRET` plus
+  `X-Review-Attempt` and the three `X-*-SHA256` correlation headers.
+- Signed source downloads use the exact URLs returned by `worker-input`.
+- `worker-callback` requires the short-lived callback bearer from that private
+  response, not the reusable worker secret.
+- Every callback repeats schema version, stable event ID, event type, run ID,
+  session, attempt, all three source hashes, and GitHub run identity.
+- State event types are `RUNNING`, `OCR_REVIEW_REQUIRED`, `FAILED`, and
+  `DELIVERY_STATUS`; completed registration uses `RESULTS_REGISTERED` with
+  multipart fields `metadata`, `pdf`, `markdown`, and `packet`.
