@@ -4,4 +4,5 @@ requests>=2.32.0
 matplotlib>=3.9.0
 mplfinance>=0.12.10b0
 reportlab>=4.2.0
+pillow>=11.0.0
 pytest>=8.0.0

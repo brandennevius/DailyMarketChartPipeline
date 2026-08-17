@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -14,7 +15,7 @@ import requests
 
 from .core import ValidationError, build_packet
 from .manifest import TICKER_RE, load_manifest
-from .marketsurge_ocr import SECTION_LABELS, extract_pdf_manifest
+from .marketsurge_ocr import EXCLUDED_TOKENS, SECTION_LABELS, extract_pdf_manifest
 from .orchestrator import run_daily_review
 from .review_mailer import send_review
 from .utils import atomic_write_text, sha256_file
@@ -49,6 +50,12 @@ class DashboardClient:
             raise ValidationError("Dashboard run_id contains unsupported characters")
         if attempt < 1:
             raise ValidationError("Dashboard attempt must be positive")
+        try:
+            normalized_session_date = date.fromisoformat(session_date).isoformat()
+        except ValueError as exc:
+            raise ValidationError("Dashboard session_date must use YYYY-MM-DD") from exc
+        if normalized_session_date != session_date:
+            raise ValidationError("Dashboard session_date must use YYYY-MM-DD")
         if set(source_hashes) != {
             "marketsurge_pdf_sha256",
             "snapshot_json_sha256",
@@ -224,24 +231,37 @@ def _merge_portfolio(manifest: dict[str, Any], portfolio: dict[str, Any]) -> dic
 def _manifest_from_corrections(
     correction_payload: dict[str, Any], *, session_date: str, marketsurge_sha256: str
 ) -> dict[str, Any]:
+    if correction_payload.get("schema_version") != "marketsurge_ocr_corrections_v2":
+        raise ValidationError("OCR corrections must use marketsurge_ocr_corrections_v2")
     corrections = correction_payload.get("corrections")
     if not isinstance(corrections, list) or not corrections:
         raise ValidationError("OCR correction source must contain a non-empty corrections array")
     labels = set(SECTION_LABELS.values())
     records: dict[str, dict[str, Any]] = {}
     pages = []
+    seen_pages: set[int] = set()
     for item in corrections:
         if not isinstance(item, dict):
             raise ValidationError("Every OCR correction item must be an object")
         page = item.get("pdf_page")
         label = item.get("label")
         tickers = item.get("tickers")
-        if not isinstance(page, int) or page < 1 or label not in labels or not isinstance(tickers, list):
-            raise ValidationError("OCR correction items require pdf_page, a known label, and tickers")
+        if (
+            not isinstance(page, int)
+            or page < 1
+            or page in seen_pages
+            or label not in labels
+            or not isinstance(tickers, list)
+            or item.get("reviewed") is not True
+        ):
+            raise ValidationError(
+                "OCR correction items require a unique pdf_page, known label, tickers, and reviewed=true"
+            )
+        seen_pages.add(page)
         cleaned = []
         for raw_ticker in tickers:
             ticker = str(raw_ticker).strip().upper()
-            if not TICKER_RE.fullmatch(ticker):
+            if not TICKER_RE.fullmatch(ticker) or ticker in EXCLUDED_TOKENS:
                 raise ValidationError(f"OCR correction contains an invalid ticker: {raw_ticker}")
             if ticker not in cleaned:
                 cleaned.append(ticker)
@@ -252,7 +272,7 @@ def _manifest_from_corrections(
                 record["sources"].append(source)
         pages.append({"pdf_page": page, "label": label, "tickers": cleaned})
     return {
-        "schema_version": "marketsurge_ocr_v1",
+        "schema_version": "marketsurge_ocr_v2",
         "status": "COMPLETE_WITH_WARNINGS",
         "session_date": session_date,
         "feed": "iex",
@@ -320,10 +340,22 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     manifest_path = work_dir / "chart-request-manifest.json"
     atomic_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     if manifest.get("status") == "NEEDS_REVIEW":
+        review_rows = [
+            {"pdf_page": page["pdf_page"], **row}
+            for page in manifest.get("pages", [])
+            for row in page.get("review_rows", [])
+        ]
         ocr = {
             "status": "NEEDS_REVIEW",
             "version": 0,
+            "schema_version": "marketsurge_ocr_v2",
             "items": manifest.get("pages", []),
+            "warnings": manifest.get("warnings", []),
+            "summary": {
+                "verified_unique_tickers": manifest.get("unique_ticker_count", 0),
+                "review_row_count": len(review_rows),
+                "affected_pages": sorted({row["pdf_page"] for row in review_rows}),
+            },
             "message": "Review page labels, visible ticker rows, and OCR warnings before retrying.",
         }
         client.callback("OCR_REVIEW_REQUIRED", f"{event_prefix}:ocr-review", {"ocr": ocr})

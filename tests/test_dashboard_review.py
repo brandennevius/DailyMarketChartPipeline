@@ -76,6 +76,8 @@ def test_dashboard_client_rejects_unsafe_run_id_and_missing_hash():
         client(run_id="../../receipt")
     with pytest.raises(ValidationError, match="three source"):
         client(source_hashes={"marketsurge_pdf_sha256": "a" * 64})
+    with pytest.raises(ValidationError, match="YYYY-MM-DD"):
+        client(session_date="Fri Aug 14")
 
 
 def test_worker_input_repeats_dispatch_correlation_and_adopts_callback_token(monkeypatch):
@@ -146,10 +148,11 @@ def test_signed_source_download_is_hash_checked_without_worker_secret(monkeypatc
 def test_ocr_corrections_form_a_hash_bound_manifest():
     manifest = _manifest_from_corrections(
         {
+            "schema_version": "marketsurge_ocr_corrections_v2",
             "expected_version": 0,
             "corrections": [
-                {"pdf_page": 2, "label": "Near Pivot", "tickers": ["NVDA", "MSFT"]},
-                {"pdf_page": 3, "label": "BRANDENS WATCHLIST", "tickers": ["MSFT"]},
+                {"pdf_page": 2, "label": "Near Pivot", "tickers": ["NVDA", "MSFT"], "reviewed": True},
+                {"pdf_page": 3, "label": "BRANDENS WATCHLIST", "tickers": ["MSFT"], "reviewed": True},
             ],
         },
         session_date="2026-08-14",
@@ -159,6 +162,16 @@ def test_ocr_corrections_form_a_hash_bound_manifest():
     assert manifest["marketsurge_pdf_sha256"] == "a" * 64
     assert [record["ticker"] for record in manifest["records"]] == ["MSFT", "NVDA"]
     assert len(manifest["records"][0]["sources"]) == 2
+
+
+@pytest.mark.parametrize("payload", [
+    {"schema_version": "marketsurge_ocr_v1", "corrections": [{"pdf_page": 1, "label": "Near Pivot", "tickers": ["NVDA"], "reviewed": True}]},
+    {"schema_version": "marketsurge_ocr_corrections_v2", "corrections": [{"pdf_page": 1, "label": "Near Pivot", "tickers": ["FAVORITES"], "reviewed": True}]},
+    {"schema_version": "marketsurge_ocr_corrections_v2", "corrections": [{"pdf_page": 1, "label": "Near Pivot", "tickers": ["NVDA"]}]},
+])
+def test_ocr_corrections_fail_closed_without_v2_reviewed_valid_symbols(payload):
+    with pytest.raises(ValidationError):
+        _manifest_from_corrections(payload, session_date="2026-08-14", marketsurge_sha256="a" * 64)
 
 
 def test_portfolio_tickers_are_merged_without_losing_scan_provenance():

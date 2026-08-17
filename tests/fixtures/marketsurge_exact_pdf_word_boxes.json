@@ -1,0 +1,47 @@
+{
+  "source": "sanitized word boxes derived from the 2026-08-14 MarketSurge PDF",
+  "pages": [
+    {
+      "page": 2,
+      "image_width": 5568,
+      "image_height": 3621,
+      "words": [
+        {"text": "Recent", "confidence": 96.0, "left": 1764, "top": 520, "width": 120, "height": 35},
+        {"text": "Breakouts", "confidence": 96.0, "left": 1895, "top": 520, "width": 170, "height": 35},
+        {"text": "33", "confidence": 96.0, "left": 2075, "top": 520, "width": 45, "height": 35},
+        {"text": "items", "confidence": 96.0, "left": 2130, "top": 520, "width": 80, "height": 35},
+        {"text": "FAVORITES", "confidence": 98.0, "left": 120, "top": 700, "width": 180, "height": 35},
+        {"text": "Symbol", "confidence": 95.91, "left": 1764, "top": 674, "width": 119, "height": 35},
+        {"text": "Name", "confidence": 96.71, "left": 5181, "top": 674, "width": 95, "height": 28},
+        {"text": "ret", "confidence": 46.35, "left": 1766, "top": 787, "width": 66, "height": 27},
+        {"text": "Forum", "confidence": 95.0, "left": 5181, "top": 787, "width": 90, "height": 27},
+        {"text": ">)", "confidence": 71.51, "left": 1765, "top": 885, "width": 21, "height": 27},
+        {"text": "Pandora", "confidence": 95.0, "left": 5181, "top": 885, "width": 110, "height": 27},
+        {"text": "LNVGY", "confidence": 91.34, "left": 1765, "top": 982, "width": 121, "height": 28},
+        {"text": "Lenovo", "confidence": 95.0, "left": 5181, "top": 982, "width": 110, "height": 28},
+        {"text": "NESR", "confidence": 91.45, "left": 1765, "top": 1080, "width": 99, "height": 28},
+        {"text": "National", "confidence": 95.0, "left": 5181, "top": 1080, "width": 125, "height": 28}
+      ]
+    },
+    {
+      "page": 9,
+      "image_width": 5568,
+      "image_height": 3621,
+      "words": [
+        {"text": "Top", "confidence": 96.0, "left": 1805, "top": 520, "width": 60, "height": 35},
+        {"text": "Rated", "confidence": 96.0, "left": 1875, "top": 520, "width": 90, "height": 35},
+        {"text": "Stocks", "confidence": 96.0, "left": 1975, "top": 520, "width": 105, "height": 35},
+        {"text": "48", "confidence": 96.0, "left": 2090, "top": 520, "width": 45, "height": 35},
+        {"text": "items", "confidence": 96.0, "left": 2145, "top": 520, "width": 80, "height": 35},
+        {"text": "Symbol", "confidence": 96.51, "left": 1805, "top": 674, "width": 119, "height": 35},
+        {"text": "Name", "confidence": 96.74, "left": 2079, "top": 674, "width": 94, "height": 28},
+        {"text": "28", "confidence": 96.99, "left": 1681, "top": 1239, "width": 39, "height": 28},
+        {"text": "ATLC", "confidence": 91.81, "left": 1803, "top": 1239, "width": 90, "height": 28},
+        {"text": "Atlanticus", "confidence": 95.0, "left": 2079, "top": 1239, "width": 140, "height": 28},
+        {"text": "29", "confidence": 97.0, "left": 1681, "top": 1337, "width": 39, "height": 28},
+        {"text": "LTH", "confidence": 95.86, "left": 1806, "top": 1337, "width": 61, "height": 27},
+        {"text": "Life", "confidence": 95.0, "left": 2079, "top": 1337, "width": 60, "height": 27}
+      ]
+    }
+  ]
+}

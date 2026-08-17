@@ -356,6 +356,7 @@ jobs:
           path: |
             dashboard-status.json
             dashboard-input/chart-request-manifest.json
+            dashboard-input/ocr-evidence/
             dashboard-input/source-manifest.json
             reports/market/
             processed/dashboard/
