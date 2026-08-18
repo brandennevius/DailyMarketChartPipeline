@@ -1,0 +1,13 @@
+{
+  "audit_status": "pass",
+  "delivery": {
+    "error": null,
+    "message_size_bytes": 2538467,
+    "status": "SENT"
+  },
+  "manifest": "dashboard-run:a185d694-97dd-46d2-aace-4b64f54b6b2c",
+  "packet_hash": "53b44794b759fd50251bd1b7086ced5cca5b05c30cff88cc7d9861290e4d1d5c",
+  "processed_at": "2026-08-18T21:12:48.831455+00:00",
+  "session_date": "2026-08-17",
+  "terminal": true
+}
