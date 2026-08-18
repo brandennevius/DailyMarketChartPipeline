@@ -1,0 +1,12 @@
+{
+  "audit_status": "failed",
+  "delivery": {
+    "error": null,
+    "status": "NOT_REQUESTED"
+  },
+  "manifest": "dashboard-run:a185d694-97dd-46d2-aace-4b64f54b6b2c",
+  "packet_hash": null,
+  "processed_at": "2026-08-18T20:05:56.162741+00:00",
+  "session_date": "2026-08-17",
+  "terminal": true
+}
