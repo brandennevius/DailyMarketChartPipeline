@@ -72,3 +72,30 @@ def test_duplicate_ticker_memberships_are_preserved(tmp_path):
     )
     request = load_manifest(write(tmp_path, payload))
     assert len(request.records_by_ticker["HPE"]["sources"]) == 2
+
+
+def test_portfolio_fx_identifier_is_valid_manifest_provenance(tmp_path):
+    payload = valid_payload()
+    payload["records"] = [
+        {
+            "ticker": "AUD/USD",
+            "chart_required": True,
+            "sources": [
+                {"source_type": "PORTFOLIO", "label": "Current Portfolio", "pdf_page": None}
+            ],
+        }
+    ]
+    request = load_manifest(write(tmp_path, payload))
+    assert request.tickers == ["AUD/USD"]
+    assert request.records_by_ticker["AUD/USD"]["sources"][0]["label"] == "Current Portfolio"
+
+
+def test_invalid_manifest_ticker_reports_source_page_and_rank(tmp_path):
+    payload = valid_payload()
+    payload["records"][0]["ticker"] = "NOT/A/PAIR"
+    payload["records"][0]["sources"][0]["rank"] = 19
+    with pytest.raises(
+        ValidationError,
+        match=r"invalid ticker 'NOT/A/PAIR'.*source=BRANDENS WATCHLIST, page=11, rank=19",
+    ):
+        load_manifest(write(tmp_path, payload))

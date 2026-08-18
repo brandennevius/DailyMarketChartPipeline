@@ -9,7 +9,27 @@ from typing import Any
 from .core import ValidationError, normalize_symbols
 
 ALLOWED_SOURCE_TYPES = {"STANDARD_MARKETSURGE", "BRANDENS_WATCHLIST", "PORTFOLIO"}
-TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+EQUITY_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+FX_PAIR_RE = re.compile(r"^[A-Z]{3}/[A-Z]{3}$")
+TICKER_RE = re.compile(r"^(?:[A-Z][A-Z0-9.\-]{0,9}|[A-Z]{3}/[A-Z]{3})$")
+
+
+def _record_source_context(record: dict[str, Any]) -> str:
+    sources = record.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return "source=unavailable, page=unavailable, rank=unavailable"
+    details = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        details.append(
+            "source={source}, page={page}, rank={rank}".format(
+                source=source.get("label") or source.get("source_type") or "unavailable",
+                page=source.get("pdf_page") if source.get("pdf_page") is not None else "unavailable",
+                rank=source.get("rank") if source.get("rank") is not None else "unavailable",
+            )
+        )
+    return "; ".join(details) or "source=unavailable, page=unavailable, rank=unavailable"
 
 
 @dataclass(frozen=True)
@@ -54,7 +74,10 @@ def load_manifest(path: str | Path) -> ManifestRequest:
             raise ValidationError(f"manifest record {index} is not an object")
         ticker = str(record.get("ticker", "")).strip().upper()
         if not TICKER_RE.fullmatch(ticker):
-            raise ValidationError(f"manifest record {index} has invalid ticker")
+            raise ValidationError(
+                f"manifest record {index} has invalid ticker {ticker!r} "
+                f"({_record_source_context(record)})"
+            )
         sources = record.get("sources")
         if not isinstance(sources, list) or not sources:
             raise ValidationError(f"{ticker}: at least one verified source is required")
@@ -67,11 +90,17 @@ def load_manifest(path: str | Path) -> ManifestRequest:
                 raise ValidationError(f"{ticker}: invalid source_type {source_type}")
             label = str(source.get("label", "")).strip()
             page = source.get("pdf_page")
+            rank = source.get("rank")
             if not label:
                 raise ValidationError(f"{ticker}: source label is required")
             if source_type != "PORTFOLIO" and (not isinstance(page, int) or page < 1):
                 raise ValidationError(f"{ticker}: positive pdf_page is required")
-            cleaned_sources.append({"source_type": source_type, "label": label, "pdf_page": page})
+            if rank is not None and (not isinstance(rank, int) or rank < 1):
+                raise ValidationError(f"{ticker}: source rank must be a positive integer when provided")
+            cleaned_source = {"source_type": source_type, "label": label, "pdf_page": page}
+            if rank is not None:
+                cleaned_source["rank"] = rank
+            cleaned_sources.append(cleaned_source)
         merged = by_ticker.setdefault(ticker, {"ticker": ticker, "sources": [], "chart_required": False})
         for source in cleaned_sources:
             if source not in merged["sources"]:

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import requests
 
 from .core import ValidationError, build_packet
-from .manifest import TICKER_RE, load_manifest
+from .manifest import EQUITY_TICKER_RE, FX_PAIR_RE, TICKER_RE, load_manifest
 from .marketsurge_ocr import EXCLUDED_TOKENS, SECTION_LABELS, extract_pdf_manifest
 from .market_gauge import normalize_dashboard_market_gauge
 from .orchestrator import run_daily_review
@@ -222,6 +222,11 @@ def _merge_portfolio(manifest: dict[str, Any], portfolio: dict[str, Any]) -> dic
         ticker = str(position.get("ticker") or position.get("symbol") or "").strip().upper()
         if not ticker:
             continue
+        if not TICKER_RE.fullmatch(ticker):
+            raise ValidationError(
+                f"portfolio instrument {ticker!r} is invalid "
+                "(source=Current Portfolio, page=unavailable, rank=unavailable)"
+            )
         record = by_ticker.setdefault(ticker, {"ticker": ticker, "chart_required": True, "sources": []})
         source = {"source_type": "PORTFOLIO", "label": "Current Portfolio", "pdf_page": None}
         if source not in record["sources"]:
@@ -264,8 +269,11 @@ def _manifest_from_corrections(
         cleaned = []
         for raw_ticker in tickers:
             ticker = str(raw_ticker).strip().upper()
-            if not TICKER_RE.fullmatch(ticker) or ticker in EXCLUDED_TOKENS:
-                raise ValidationError(f"OCR correction contains an invalid ticker: {raw_ticker}")
+            if not EQUITY_TICKER_RE.fullmatch(ticker) or ticker in EXCLUDED_TOKENS:
+                raise ValidationError(
+                    f"OCR correction contains invalid ticker {raw_ticker!r} "
+                    f"(source={label}, page={page}, rank=unavailable)"
+                )
             if ticker not in cleaned:
                 cleaned.append(ticker)
             source_type = "BRANDENS_WATCHLIST" if label == "BRANDENS WATCHLIST" else "STANDARD_MARKETSURGE"
@@ -285,6 +293,22 @@ def _manifest_from_corrections(
         "pages": pages,
         "warnings": [{"code": "USER_APPROVED_OCR_CORRECTIONS"}],
     }
+
+
+def _partition_chart_symbols(tickers: list[str]) -> tuple[list[str], dict[str, str]]:
+    chartable: list[str] = []
+    unavailable: dict[str, str] = {}
+    for ticker in tickers:
+        if EQUITY_TICKER_RE.fullmatch(ticker):
+            chartable.append(ticker)
+        elif FX_PAIR_RE.fullmatch(ticker):
+            unavailable[ticker] = (
+                "UNSUPPORTED_CHART_ASSET_CLASS: the exact-session equities OHLC provider does not "
+                "support FX pairs; no equity-symbol or live-price substitution was attempted."
+            )
+        else:
+            unavailable[ticker] = "UNSUPPORTED_CHART_IDENTIFIER: no deterministic chart provider mapping is configured."
+    return chartable, unavailable
 
 
 def _artifact_metadata(kind: str, path: Path, media_type: str) -> dict[str, Any]:
@@ -387,9 +411,17 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     )
     provenance = {ticker: record["sources"] for ticker, record in chart_request.records_by_ticker.items()}
     chart_dir = work_dir / "chart-packet" / client.session_date
+    requested_tickers = sorted(provenance)
+    chartable_tickers, unavailable_tickers = _partition_chart_symbols(requested_tickers)
     chart_payload = build_packet(
-        sorted(provenance), client.session_date, chart_dir, manifest.get("feed", "iex"), provenance
+        chartable_tickers, client.session_date, chart_dir, manifest.get("feed", "iex"), provenance
     )
+    chart_payload["requested_tickers"] = requested_tickers
+    chart_payload.setdefault("errors", {}).update(unavailable_tickers)
+    chart_payload["error_count"] = len(chart_payload["errors"])
+    if unavailable_tickers:
+        chart_payload["status"] = "COMPLETE_WITH_WARNINGS"
+        chart_payload["unsupported_chart_instruments"] = unavailable_tickers
     chart_payload["source_manifest"] = {"path": str(manifest_path), "records": chart_request.records_by_ticker}
     chart_json = chart_dir / f"Market_Chart_Data_{client.session_date}.json"
     atomic_write_text(chart_json, json.dumps(chart_payload, indent=2, sort_keys=True) + "\n")

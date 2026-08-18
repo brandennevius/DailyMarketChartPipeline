@@ -11,6 +11,7 @@ from market_chart_pipeline.dashboard_review import (
     _artifact_metadata,
     _manifest_from_corrections,
     _merge_portfolio,
+    _partition_chart_symbols,
 )
 
 
@@ -191,6 +192,29 @@ def test_portfolio_tickers_are_merged_without_losing_scan_provenance():
     assert [record["ticker"] for record in merged["records"]] == ["LLY", "MSFT"]
     msft = next(record for record in merged["records"] if record["ticker"] == "MSFT")
     assert {source["source_type"] for source in msft["sources"]} == {"STANDARD_MARKETSURGE", "PORTFOLIO"}
+
+
+def test_portfolio_fx_pair_is_preserved_but_not_sent_to_equities_provider():
+    merged = _merge_portfolio(
+        {"records": [], "unique_ticker_count": 0},
+        {"open_positions": [{"ticker": "AUD/USD"}, {"ticker": "LLY"}]},
+    )
+    assert [record["ticker"] for record in merged["records"]] == ["AUD/USD", "LLY"]
+    chartable, unavailable = _partition_chart_symbols(["AUD/USD", "LLY"])
+    assert chartable == ["LLY"]
+    assert unavailable["AUD/USD"].startswith("UNSUPPORTED_CHART_ASSET_CLASS")
+    assert "substitution was attempted" in unavailable["AUD/USD"]
+
+
+def test_ocr_correction_rejects_fx_pair_with_page_and_source_context():
+    payload = {
+        "schema_version": "marketsurge_ocr_corrections_v2",
+        "corrections": [
+            {"pdf_page": 9, "label": "BRANDENS WATCHLIST", "tickers": ["AUD/USD"], "reviewed": True}
+        ],
+    }
+    with pytest.raises(ValidationError, match=r"source=BRANDENS WATCHLIST, page=9, rank=unavailable"):
+        _manifest_from_corrections(payload, session_date="2026-08-17", marketsurge_sha256="a" * 64)
 
 
 def test_artifact_metadata_hashes_exact_registered_bytes(tmp_path):

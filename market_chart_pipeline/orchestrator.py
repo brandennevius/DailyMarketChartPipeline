@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 
 from .adapters import (
     derive_candidates_from_chart,
@@ -66,12 +67,13 @@ def run_daily_review(
         portfolio = enrich_positions_from_charts(portfolio, chart_payload, chart_dir)
     for position in portfolio:
         ticker = str(position.get("ticker") or "UNKNOWN").upper()
+        asset_ticker = re.sub(r"[^A-Z0-9._-]+", "_", ticker).strip("_") or "UNKNOWN"
         try:
             position["sell_sandbox_asset"] = build_sell_sandbox_chart(
                 position,
                 policy,
                 resolved_session,
-                session_dir / "assets" / f"{ticker}_sell_sandbox.png",
+                session_dir / "assets" / f"{asset_ticker}_sell_sandbox.png",
             )
             position["sell_sandbox_status"] = "verified"
         except Exception as exc:
