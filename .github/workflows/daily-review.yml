@@ -27,6 +27,10 @@ on:
         description: Frozen portfolio snapshot Markdown SHA-256
         required: false
         type: string
+      market_gauge_json_sha256:
+        description: Frozen exact-session Dashboard Market Gauge JSON SHA-256
+        required: false
+        type: string
       worker_input_url:
         description: Authenticated TradingDashboard worker-input endpoint
         required: false
@@ -298,6 +302,7 @@ jobs:
             --marketsurge-pdf-sha256 "${{ inputs.marketsurge_pdf_sha256 }}" \
             --snapshot-json-sha256 "${{ inputs.snapshot_json_sha256 }}" \
             --snapshot-markdown-sha256 "${{ inputs.snapshot_markdown_sha256 }}" \
+            --market-gauge-json-sha256 "${{ inputs.market_gauge_json_sha256 }}" \
             --worker-input-url "${{ inputs.worker_input_url }}" \
             --worker-callback-url "${{ inputs.worker_callback_url }}" \
             --work-dir dashboard-input \

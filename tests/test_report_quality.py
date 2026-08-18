@@ -4,7 +4,7 @@ import pytest
 
 from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
-from market_chart_pipeline.render import render_markdown, render_pdf
+from market_chart_pipeline.render import audit_rendered_pdf, render_markdown, render_pdf
 
 
 SESSION = "2026-08-14"
@@ -156,3 +156,48 @@ def test_pdf_rejects_tampered_sell_sandbox_asset(tmp_path: Path):
 
     with pytest.raises(ValidationError, match="hash mismatch"):
         render_pdf(packet, report_dir=tmp_path)
+
+
+def test_complete_watchlist_and_position_failure_pages_are_rendered(tmp_path: Path):
+    watchlist = [
+        {
+            "ticker": f"W{index:02d}",
+            "origin": "watchlist",
+            "internal_canslim_score": 10,
+            "classification": "WATCH",
+            "action": "HOLD",
+            "rationale": "Pivot is not verified.",
+            "snapshot": {"source_labels": ["BRANDENS WATCHLIST"]},
+        }
+        for index in range(1, 16)
+    ]
+    packet = {
+        "session_date": SESSION,
+        "policy_version": "test-policy",
+        "packet_sha256": "a" * 64,
+        "audit_profile": "standard",
+        "market_regime": {"classification": "INSUFFICIENT_EVIDENCE", "dashboard_market_gauge_posture": "Neutral"},
+        "market_breadth": {"verified_symbols": 0},
+        "portfolio_risk": {"account_value": 100_000, "normalized_long_position_count": 1},
+        "sell_rule_results": [{
+            "ticker": "FAIL",
+            "action": "INSUFFICIENT_EVIDENCE",
+            "rationale": "Sandbox evidence unavailable.",
+            "events": [{"rule": "critical_evidence", "status": "INSUFFICIENT_EVIDENCE", "values": {}}],
+            "position_snapshot": {"sell_sandbox_status": "insufficient_evidence", "sell_sandbox_error": "Missing verified price history."},
+        }],
+        "candidate_results": watchlist,
+        "chart_verification": {"verified_tickers": [], "requested_tickers": [item["ticker"] for item in watchlist]},
+        "input_sets": {"portfolio_tickers": ["FAIL"], "watchlist_tickers": [item["ticker"] for item in watchlist]},
+    }
+    markdown = render_markdown(packet)
+    assert "Complete Results (15)" in markdown
+    assert all(f"**{item['ticker']}**" in markdown for item in watchlist)
+    pdf_path = tmp_path / "review.pdf"
+    pdf_path.write_bytes(render_pdf(packet, report_dir=tmp_path))
+    evidence = audit_rendered_pdf(pdf_path, packet)
+    assert {item["gate"] for item in evidence} == {"position_sandbox_page", "complete_watchlist_render"}
+    from pypdf import PdfReader
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf_path)).pages)
+    assert "SELL-RULE SANDBOX UNAVAILABLE - FAIL" in text
+    assert "FAIL daily chart through" not in text

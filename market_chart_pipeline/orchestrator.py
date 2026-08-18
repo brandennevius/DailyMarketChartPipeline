@@ -13,7 +13,7 @@ from .adapters import (
 from .audit import audit_packet
 from .packet import build_review_packet, freeze_packet
 from .policy import load_policy
-from .render import render_markdown, render_pdf
+from .render import audit_rendered_pdf, render_markdown, render_pdf
 from .sell_charts import build_sell_sandbox_chart
 from .utils import atomic_write_text, load_json
 
@@ -106,6 +106,14 @@ def run_daily_review(
     atomic_write_text(md_path, markdown)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_path.write_bytes(render_pdf(packet, chart_dir, session_dir))
+    rendered_evidence = audit_rendered_pdf(pdf_path, packet)
+    packet["validation_evidence"] = [*packet.get("validation_evidence", []), *rendered_evidence]
+    packet = freeze_packet(packet)
+    audit_packet(packet)
+    pdf_path.write_bytes(render_pdf(packet, chart_dir, session_dir))
+    audit_rendered_pdf(pdf_path, packet)
+    atomic_write_text(json_path, json.dumps(packet, indent=2, sort_keys=True) + "\n")
+    atomic_write_text(md_path, render_markdown(packet))
     return {"packet": packet, "json_path": str(json_path), "markdown_path": str(md_path), "pdf_path": str(pdf_path)}
 
 

@@ -133,6 +133,14 @@ def build_review_packet(
                 "evidence": ["No deterministic market-regime input was supplied."],
             },
         ),
+        "exposure_guidance": market_data.get(
+            "exposure_guidance",
+            {
+                "status": "INSUFFICIENT_EVIDENCE",
+                "exact_exposure": "indeterminate",
+                "evidence": ["No deterministic market-permission input was supplied."],
+            },
+        ),
         "market_breadth": market_breadth or {"status": "insufficient_evidence", "verified_symbols": 0},
         "portfolio_risk": {
             "position_count": len(portfolio),
@@ -148,6 +156,11 @@ def build_review_packet(
         "input_sets": {
             "portfolio_tickers": sorted(str(item.get("ticker", "")).upper() for item in portfolio if item.get("ticker")),
             "candidate_tickers": sorted(str(item.get("ticker", "")).upper() for item in candidates if item.get("ticker")),
+            "watchlist_tickers": sorted(
+                str(item.get("ticker", "")).upper()
+                for item in candidates
+                if item.get("ticker") and item.get("origin") == "watchlist"
+            ),
         },
         "validation_evidence": [],
     }

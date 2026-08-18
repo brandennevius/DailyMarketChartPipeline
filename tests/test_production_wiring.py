@@ -115,8 +115,10 @@ def test_strict_core_run_checks_sources_hashes_and_set_relationships(tmp_path):
     scan.write_bytes(b"scan")
     artifact = tmp_path / "artifact.zip"
     artifact.write_bytes(b"artifact")
+    gauge = tmp_path / "market-gauge.json"
+    gauge.write_text("{}", encoding="utf-8")
     sources = []
-    for label, path in [("portfolio_snapshot", portfolio), ("marketsurge_scan", scan), ("chart_packet_artifact", artifact)]:
+    for label, path in [("portfolio_snapshot", portfolio), ("marketsurge_scan", scan), ("market_gauge_json", gauge), ("chart_packet_artifact", artifact)]:
         sources.append({"label": label, "path": str(path), "sha256": sha256_file(path), "status": "verified"})
     manifest = tmp_path / "source-manifest.json"
     manifest.write_text(json.dumps({"session_date": SESSION, "sources": sources}), encoding="utf-8")
@@ -141,6 +143,82 @@ def test_strict_core_run_checks_sources_hashes_and_set_relationships(tmp_path):
     sandbox = result["packet"]["sell_rule_results"][0]["position_snapshot"]["sell_sandbox_asset"]
     assert sandbox["status"] == "verified"
     assert sandbox["sha256"]
+
+
+def test_production_shaped_review_preserves_all_watchlist_rows_and_position_pages(tmp_path):
+    tickers = [f"WL{index:02d}" for index in range(1, 16)]
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    pdf = chart_dir / f"Market_Chart_Packet_{SESSION}.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+    records = [_chart_payload("unused")["records"][0]]
+    manifest_records = {
+        "MSFT": {"sources": [{"source_type": "PORTFOLIO", "label": "Current Portfolio"}]}
+    }
+    for ticker in tickers:
+        source = {"source_type": "BRANDENS_WATCHLIST", "label": "BRANDENS WATCHLIST", "pdf_page": 8}
+        manifest_records[ticker] = {"sources": [source]}
+        records.append({
+            "metrics": {"ticker": ticker, "current_price": 25, "sma21": 24, "sma50": 23, "sma200": 20, "quantitative_gate": "CHART_REVIEW"},
+            "technical_context": {"relative_strength": {"trend_21d": "RISING"}, "volume": {}, "base_analysis": {"pivot_status": "VISUAL_CONFIRMATION_REQUIRED"}},
+            "fmp": {},
+            "sources": [source],
+            "latest_bar_date": SESSION,
+            "daily_chart": f"{ticker}-daily.png",
+            "weekly_chart": f"{ticker}-weekly.png",
+            "price_history": _price_history(),
+        })
+    requested = ["MSFT", *tickers]
+    payload = {
+        "session_date": SESSION,
+        "status": "COMPLETE",
+        "requested_tickers": requested,
+        "verified_count": len(requested),
+        "error_count": 0,
+        "errors": {},
+        "source_manifest": {"records": manifest_records},
+        "artifacts": {"pdf_sha256": sha256_file(pdf)},
+        "records": records,
+    }
+    (chart_dir / f"Market_Chart_Data_{SESSION}.json").write_text(json.dumps(payload), encoding="utf-8")
+    portfolio = tmp_path / "portfolio.json"
+    portfolio.write_text(json.dumps(_snapshot()), encoding="utf-8")
+    scan = tmp_path / "scan.pdf"
+    scan.write_bytes(b"scan")
+    gauge = tmp_path / "market-gauge.json"
+    gauge.write_text("{}", encoding="utf-8")
+    archive = tmp_path / "chart.zip"
+    archive.write_bytes(b"chart archive")
+    sources = [
+        {"label": label, "path": str(path), "sha256": sha256_file(path), "status": "verified"}
+        for label, path in [
+            ("portfolio_snapshot", portfolio),
+            ("marketsurge_scan", scan),
+            ("market_gauge_json", gauge),
+            ("chart_packet_artifact", archive),
+        ]
+    ]
+    manifest = tmp_path / "sources.json"
+    manifest.write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    result = run_daily_review(
+        requested_date=SESSION,
+        session_date=SESSION,
+        mode="read-only",
+        output_dir=tmp_path / "reports",
+        portfolio_path=str(portfolio),
+        chart_packet_dir=str(chart_dir),
+        source_manifest_path=str(manifest),
+        audit_profile="strict-core",
+    )
+    watchlist_results = [item for item in result["packet"]["candidate_results"] if item["origin"] == "watchlist"]
+    assert {item["ticker"] for item in watchlist_results} == set(tickers)
+    gates = result["packet"]["validation_evidence"]
+    assert next(item for item in gates if item["gate"] == "complete_watchlist_render")["ticker_count"] == 15
+    assert next(item for item in gates if item["gate"] == "position_sandbox_page")["ticker"] == "MSFT"
+    from pypdf import PdfReader
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(result["pdf_path"]).pages)
+    assert all(ticker in text for ticker in tickers)
+    assert "VERIFIED SELL-RULE SANDBOX - MSFT" in text
 
 
 def test_strict_core_run_rejects_tampered_source(tmp_path):

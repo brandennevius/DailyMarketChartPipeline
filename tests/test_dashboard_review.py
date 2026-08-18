@@ -18,6 +18,7 @@ HASHES = {
     "marketsurge_pdf_sha256": "a" * 64,
     "snapshot_json_sha256": "b" * 64,
     "snapshot_markdown_sha256": "c" * 64,
+    "market_gauge_json_sha256": "d" * 64,
 }
 
 
@@ -74,7 +75,7 @@ def test_dashboard_client_rejects_cross_origin_source_url():
 def test_dashboard_client_rejects_unsafe_run_id_and_missing_hash():
     with pytest.raises(ValidationError, match="run_id"):
         client(run_id="../../receipt")
-    with pytest.raises(ValidationError, match="three source"):
+    with pytest.raises(ValidationError, match="four source"):
         client(source_hashes={"marketsurge_pdf_sha256": "a" * 64})
     with pytest.raises(ValidationError, match="YYYY-MM-DD"):
         client(session_date="Fri Aug 14")
@@ -95,6 +96,7 @@ def test_worker_input_repeats_dispatch_correlation_and_adopts_callback_token(mon
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert captured["headers"]["X-Review-Attempt"] == "1"
     assert captured["headers"]["X-Snapshot-Markdown-SHA256"] == "c" * 64
+    assert captured["headers"]["X-Market-Gauge-JSON-SHA256"] == "d" * 64
     assert dashboard.callback_token == "short-lived-token"
 
 
@@ -207,6 +209,7 @@ def test_daily_review_workflow_exposes_exact_non_secret_dashboard_contract():
         "marketsurge_pdf_sha256",
         "snapshot_json_sha256",
         "snapshot_markdown_sha256",
+        "market_gauge_json_sha256",
         "worker_input_url",
         "worker_callback_url",
     ):

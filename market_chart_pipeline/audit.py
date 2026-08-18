@@ -21,6 +21,7 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
         required_sources = {
             "portfolio_snapshot",
             "marketsurge_scan",
+            "market_gauge_json",
             "chart_packet_artifact",
             "chart_packet_json",
             "chart_packet_pdf",
@@ -46,15 +47,26 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValidationError("Strict candidate universe does not match the chart source manifest")
         evidence.append({"gate": "strict_core_sources", "status": "pass", "required": sorted(required_sources)})
 
-        missing_sandboxes = [
-            item.get("ticker")
-            for item in packet.get("sell_rule_results", [])
-            if item.get("position_snapshot", {}).get("sell_sandbox_status") != "verified"
-            or not item.get("position_snapshot", {}).get("sell_sandbox_asset", {}).get("sha256")
-        ]
-        if missing_sandboxes:
-            raise ValidationError(f"Strict sell-sandbox chart gate failed: {sorted(missing_sandboxes)}")
-        evidence.append({"gate": "sell_sandbox_charts", "status": "pass"})
+        invalid_sandbox_states = []
+        verified_sandboxes = []
+        explicit_failures = []
+        for item in packet.get("sell_rule_results", []):
+            ticker = item.get("ticker")
+            snapshot = item.get("position_snapshot", {})
+            if snapshot.get("sell_sandbox_status") == "verified" and snapshot.get("sell_sandbox_asset", {}).get("sha256"):
+                verified_sandboxes.append(ticker)
+            elif snapshot.get("sell_sandbox_status") == "insufficient_evidence" and snapshot.get("sell_sandbox_error"):
+                explicit_failures.append(ticker)
+            else:
+                invalid_sandbox_states.append(ticker)
+        if invalid_sandbox_states:
+            raise ValidationError(f"Strict sell-sandbox state gate failed: {sorted(invalid_sandbox_states)}")
+        evidence.append({
+            "gate": "sell_sandbox_charts",
+            "status": "pass",
+            "verified": sorted(verified_sandboxes),
+            "explicit_failures": sorted(explicit_failures),
+        })
 
     allowed_origins = {"scanner", "watchlist", "open_position", None}
     bad_origins = [item for item in packet.get("candidate_results", []) if item.get("origin") not in allowed_origins]
@@ -103,7 +115,16 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
     scored_tickers = {str(item.get("ticker", "")).upper() for item in packet.get("candidate_results", [])}
     if candidate_tickers != scored_tickers:
         raise ValidationError("Candidate/result set relationship failed")
+    watchlist_tickers = set(packet.get("input_sets", {}).get("watchlist_tickers", []))
+    watchlist_results = {
+        str(item.get("ticker", "")).upper()
+        for item in packet.get("candidate_results", [])
+        if item.get("origin") == "watchlist"
+    }
+    if watchlist_tickers != watchlist_results:
+        raise ValidationError("Watchlist/result set relationship failed")
     evidence.append({"gate": "set_relationships", "status": "pass"})
+    evidence.append({"gate": "complete_watchlist_results", "status": "pass", "ticker_count": len(watchlist_tickers)})
 
     for item in packet.get("candidate_results", []):
         components = item.get("score_components") or {}

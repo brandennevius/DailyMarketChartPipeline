@@ -95,7 +95,7 @@ def _headline(packet: dict[str, Any]) -> str:
     return "No portfolio position requires a deterministic sell action."
 
 
-def _review_candidates(packet: dict[str, Any], limit: int = 12) -> list[dict[str, Any]]:
+def _review_candidates(packet: dict[str, Any], limit: int | None = None) -> list[dict[str, Any]]:
     positions = set(packet.get("input_sets", {}).get("portfolio_tickers", []))
     candidates = [item for item in packet.get("candidate_results", []) if item.get("ticker") not in positions]
     candidates.sort(
@@ -105,7 +105,15 @@ def _review_candidates(packet: dict[str, Any], limit: int = 12) -> list[dict[str
             item.get("ticker", ""),
         )
     )
-    return candidates[:limit]
+    return candidates if limit is None else candidates[:limit]
+
+
+def _watchlist_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every watchlist-derived result; this list must never be rank-truncated."""
+    return sorted(
+        (item for item in packet.get("candidate_results", []) if item.get("origin") == "watchlist"),
+        key=lambda item: str(item.get("ticker") or ""),
+    )
 
 
 def render_markdown(packet: dict[str, Any]) -> str:
@@ -122,6 +130,8 @@ def render_markdown(packet: dict[str, Any]) -> str:
         "",
         "## Market And Leadership Breadth",
         f"- Regime: {packet.get('market_regime', {}).get('classification')} (index follow-through/distribution evidence was not supplied).",
+        f"- Dashboard Market Gauge posture: {packet.get('market_regime', {}).get('dashboard_market_gauge_posture') or 'unavailable'}; this is supporting trend evidence, not a substitute for O'Neil distribution/follow-through evidence.",
+        f"- Exposure: {packet.get('exposure_guidance', {}).get('statement') or 'Exact exposure is indeterminate because market-permission evidence is incomplete.'}",
         f"- Review universe: {breadth.get('verified_symbols', 0)} verified symbols; above 21d {breadth.get('above_21d_pct', '-')}%; above 50d {breadth.get('above_50d_pct', '-')}%; above 200d {breadth.get('above_200d_pct', '-')}%.",
         "",
         "## Portfolio Actions",
@@ -132,6 +142,22 @@ def render_markdown(packet: dict[str, Any]) -> str:
             f"- **{result['ticker']} - {result['action']}**: return {_pct(result.get('gain_pct'))}, "
             f"open R {_number(snap.get('open_r_multiple'))}, stop {_money(snap.get('stop_price'), 2)}, "
             f"target {_money(snap.get('take_profit'), 2)}. {result['rationale']}"
+        )
+    watchlist = _watchlist_candidates(packet)
+    lines.extend(
+        [
+            "",
+            f"## Brandens Watchlist - Complete Results ({len(watchlist)})",
+            "- Every MarketSurge row labeled BRANDENS WATCHLIST is retained below; the list is not truncated by rank.",
+        ]
+    )
+    for item in watchlist:
+        snap = item.get("snapshot", {})
+        labels = ", ".join(snap.get("source_labels") or []) or "BRANDENS WATCHLIST"
+        chart_status = "verified chart record" if item.get("ticker") in packet.get("chart_verification", {}).get("verified_tickers", []) else "chart evidence unavailable"
+        lines.append(
+            f"- **{item['ticker']}** - origin WATCHLIST; source {labels}; result {item.get('classification')}; "
+            f"action {item.get('action')}; {chart_status}; {item.get('rationale')}"
         )
     lines.extend(["", "## Visual Review Queue", "- These are research priorities, not buy signals. All require visual pivot confirmation."])
     for item in _review_candidates(packet):
@@ -264,7 +290,9 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         action_rows.append([result["ticker"], result["action"], _pct(result.get("gain_pct")), _number(snap.get("open_r_multiple")), _money(snap.get("stop_price"), 2), _money(snap.get("take_profit"), 2), result.get("rationale", "")])
     story.append(_table(action_rows, [0.55 * inch, 0.65 * inch, 0.58 * inch, 0.48 * inch, 0.65 * inch, 0.7 * inch, 2.95 * inch], styles, {2, 3, 4, 5}))
     story.extend([Spacer(1, 10), _p("Market and leadership evidence", styles["h1"])])
-    story.append(_p("A confirmed O'Neil market regime is unavailable because index follow-through and distribution-day evidence was not supplied. The breadth below describes only the verified MarketSurge-derived review universe and should not be treated as full-exchange breadth.", styles["body"]))
+    posture = packet.get("market_regime", {}).get("dashboard_market_gauge_posture") or "unavailable"
+    story.append(_p(f"A confirmed O'Neil market regime is unavailable because index follow-through and distribution-day evidence was not supplied. The frozen Dashboard Market Gauge posture is {posture}; it is supporting trend evidence only. The breadth below describes only the verified MarketSurge-derived review universe and should not be treated as full-exchange breadth.", styles["body"]))
+    story.append(_p(packet.get("exposure_guidance", {}).get("statement") or "Exact exposure is indeterminate because market-permission evidence is incomplete.", styles["body"]))
     breadth_rows = [
         ["Verified", "Above 21d", "Above 50d", "Above 200d", "RS rising", "Positive A/D", "Chart priority"],
         [str(breadth.get("verified_symbols", 0)), f"{breadth.get('above_21d_pct', '-')}%", f"{breadth.get('above_50d_pct', '-')}%", f"{breadth.get('above_200d_pct', '-')}%", f"{breadth.get('rs_rising_pct', '-')}%", f"{breadth.get('positive_accumulation_pct', '-')}%", str(breadth.get("chart_review_priority_count", 0))],
@@ -297,18 +325,48 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             story.append(_p(f"Capital protection: {hard.get('status')} | effective policy stop {_money(values.get('effective_stop'), 2)} | working stop {_money(snap.get('stop_price'), 2)}", styles["small"]))
         sandbox = snap.get("sell_sandbox_asset") or {}
         sandbox_path = report_dir / sandbox.get("file", "") if report_dir and sandbox.get("file") else None
-        asset = snap.get("daily_chart_asset") or {}
-        daily_path = chart_dir / asset.get("file", "") if chart_dir and asset.get("file") else None
-        chart_path = sandbox_path if sandbox_path and sandbox_path.exists() else daily_path
-        if chart_path and chart_path.exists():
-            expected_hash = sandbox.get("sha256") if sandbox_path and chart_path == sandbox_path else asset.get("sha256")
-            if expected_hash and sha256_file(chart_path) != expected_hash:
+        if sandbox_path and sandbox_path.exists():
+            expected_hash = sandbox.get("sha256")
+            if not expected_hash or sha256_file(sandbox_path) != expected_hash:
                 raise ValidationError(f"{result['ticker']}: report chart asset hash mismatch")
-            image = Image(str(chart_path), width=6.75 * inch, height=3.75 * inch, kind="proportional")
-            chart_label = "sell-rule sandbox" if sandbox_path and chart_path == sandbox_path else "daily chart"
-            story.extend([Spacer(1, 4), image, _p(f"{result['ticker']} {chart_label} through {session}. Chart asset is hash-locked in the review packet.", styles["small"])])
+            image = Image(str(sandbox_path), width=6.75 * inch, height=3.75 * inch, kind="proportional")
+            story.extend([
+                Spacer(1, 4),
+                _p(f"VERIFIED SELL-RULE SANDBOX - {result['ticker']}", styles["h2"]),
+                image,
+                _p(f"{result['ticker']} sell-rule sandbox through {session}. Chart asset is hash-locked in the review packet.", styles["small"]),
+            ])
+        else:
+            error = snap.get("sell_sandbox_error") or "The deterministic sell-rule sandbox could not be produced from the frozen inputs."
+            failure = Table(
+                [[_p(f"SELL-RULE SANDBOX UNAVAILABLE - {result['ticker']}", styles["h2"])], [_p(error, styles["body"])], [_p("No ordinary daily chart was substituted. Position advice remains insufficient where this evidence is required.", styles["body"]) ]],
+                colWidths=[6.8 * inch],
+            )
+            failure.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), RED_BG), ("BOX", (0, 0), (-1, -1), 0.8, RED), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+            story.extend([Spacer(1, 6), failure])
         if index < len(results) - 1:
             story.append(PageBreak())
+
+    watchlist = _watchlist_candidates(packet)
+    story.append(PageBreak())
+    story.append(_p(f"Brandens Watchlist - Complete Results ({len(watchlist)})", styles["title"]))
+    story.append(_p("Every MarketSurge source row labeled BRANDENS WATCHLIST is shown. Ranking never truncates this provenance audit.", styles["subtitle"]))
+    watchlist_rows = [["Ticker", "Origin", "Source label(s)", "Result", "Action", "Chart evidence", "Reason"]]
+    verified_tickers = set(packet.get("chart_verification", {}).get("verified_tickers", []))
+    for item in watchlist:
+        snap = item.get("snapshot", {})
+        watchlist_rows.append([
+            item.get("ticker"),
+            "WATCHLIST",
+            ", ".join(snap.get("source_labels") or []) or "BRANDENS WATCHLIST",
+            item.get("classification"),
+            item.get("action"),
+            "verified" if item.get("ticker") in verified_tickers else "unavailable",
+            item.get("rationale"),
+        ])
+    if len(watchlist_rows) == 1:
+        watchlist_rows.append(["-", "WATCHLIST", "No watchlist rows supplied", "-", "-", "-", "-"])
+    story.append(_table(watchlist_rows, [0.55 * inch, 0.62 * inch, 1.25 * inch, 0.68 * inch, 0.55 * inch, 0.75 * inch, 2.4 * inch], styles))
 
     story.append(PageBreak())
     story.append(_p("Visual Review Queue", styles["title"]))
@@ -403,3 +461,30 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
 
     document.build(story, onFirstPage=footer, onLaterPages=footer)
     return buffer.getvalue()
+
+
+def audit_rendered_pdf(pdf_path: Path, packet: dict[str, Any]) -> list[dict[str, Any]]:
+    """Verify every position and watchlist row survived final PDF composition."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path))
+    page_text = [(page.extract_text() or "") for page in reader.pages]
+    evidence: list[dict[str, Any]] = []
+    for result in packet.get("sell_rule_results", []):
+        ticker = str(result.get("ticker") or "UNKNOWN").upper()
+        matching_pages = [
+            index + 1
+            for index, text in enumerate(page_text)
+            if f"VERIFIED SELL-RULE SANDBOX - {ticker}" in text
+            or f"SELL-RULE SANDBOX UNAVAILABLE - {ticker}" in text
+        ]
+        if len(matching_pages) != 1:
+            raise ValidationError(f"{ticker}: rendered PDF must contain exactly one dedicated sell-sandbox status page")
+        evidence.append({"gate": "position_sandbox_page", "status": "pass", "ticker": ticker, "pdf_page": matching_pages[0]})
+    watchlist = _watchlist_candidates(packet)
+    full_text = "\n".join(page_text)
+    missing = [str(item.get("ticker")) for item in watchlist if str(item.get("ticker")) not in full_text]
+    if missing:
+        raise ValidationError(f"Rendered PDF omitted watchlist results: {sorted(missing)}")
+    evidence.append({"gate": "complete_watchlist_render", "status": "pass", "ticker_count": len(watchlist)})
+    return evidence

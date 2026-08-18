@@ -16,6 +16,7 @@ import requests
 from .core import ValidationError, build_packet
 from .manifest import TICKER_RE, load_manifest
 from .marketsurge_ocr import EXCLUDED_TOKENS, SECTION_LABELS, extract_pdf_manifest
+from .market_gauge import normalize_dashboard_market_gauge
 from .orchestrator import run_daily_review
 from .review_mailer import send_review
 from .utils import atomic_write_text, sha256_file
@@ -60,8 +61,9 @@ class DashboardClient:
             "marketsurge_pdf_sha256",
             "snapshot_json_sha256",
             "snapshot_markdown_sha256",
+            "market_gauge_json_sha256",
         } or any(not SHA256_RE.fullmatch(value) for value in source_hashes.values()):
-            raise ValidationError("Dashboard dispatch must contain all three source SHA-256 values")
+            raise ValidationError("Dashboard dispatch must contain all four source SHA-256 values")
         allowed = urlparse(self._absolute_https(allowed_base_url))
         self.origin = (allowed.scheme, allowed.netloc)
         self.worker_input_url = self._same_origin_url(worker_input_url)
@@ -100,6 +102,7 @@ class DashboardClient:
                 "X-MarketSurge-PDF-SHA256": self.source_hashes["marketsurge_pdf_sha256"],
                 "X-Snapshot-JSON-SHA256": self.source_hashes["snapshot_json_sha256"],
                 "X-Snapshot-Markdown-SHA256": self.source_hashes["snapshot_markdown_sha256"],
+                "X-Market-Gauge-JSON-SHA256": self.source_hashes["market_gauge_json_sha256"],
             },
             timeout=60,
         )
@@ -300,9 +303,11 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     client.callback("RUNNING", f"{event_prefix}:acquiring", {"stage": "ACQUIRING_INPUTS"})
     portfolio_spec = request.get("portfolio_snapshot") or {}
     pdf_spec = request.get("marketsurge_pdf") or {}
+    gauge_spec = request.get("market_gauge") or {}
     portfolio_path = work_dir / "portfolio-snapshot.json"
     snapshot_markdown_path = work_dir / "portfolio-snapshot.md"
     pdf_path = work_dir / "marketsurge-scan.pdf"
+    gauge_path = work_dir / "market-gauge.json"
     client.download(str(portfolio_spec["download_url"]), portfolio_path, str(portfolio_spec["sha256"]), max_bytes=10_000_000)
     client.download(
         str(portfolio_spec["markdown_download_url"]),
@@ -311,8 +316,14 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
         max_bytes=10_000_000,
     )
     client.download(str(pdf_spec["download_url"]), pdf_path, str(pdf_spec["sha256"]), max_bytes=20 * 1024 * 1024)
+    client.download(str(gauge_spec["download_url"]), gauge_path, str(gauge_spec["sha256"]), max_bytes=2_000_000)
     page_count = _validate_pdf(pdf_path, pdf_spec.get("page_count"))
     portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
+    market_data = normalize_dashboard_market_gauge(
+        json.loads(gauge_path.read_text(encoding="utf-8")), client.session_date
+    )
+    market_data_path = work_dir / "market-data.json"
+    atomic_write_text(market_data_path, json.dumps(market_data, indent=2, sort_keys=True) + "\n")
 
     corrections = request.get("ocr_corrections")
     if corrections:
@@ -391,6 +402,7 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
             {"label": "portfolio_snapshot", "path": str(portfolio_path), "sha256": sha256_file(portfolio_path), "status": "verified"},
             {"label": "portfolio_snapshot_markdown", "path": str(snapshot_markdown_path), "sha256": sha256_file(snapshot_markdown_path), "status": "verified"},
             {"label": "marketsurge_scan", "path": str(pdf_path), "sha256": sha256_file(pdf_path), "status": "verified", "page_count": page_count},
+            {"label": "market_gauge_json", "path": str(gauge_path), "sha256": sha256_file(gauge_path), "status": "verified"},
             {"label": "chart_packet_artifact", "path": str(chart_archive), "sha256": sha256_file(chart_archive), "status": "verified"},
         ],
     }
@@ -403,6 +415,7 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
         mode="read-only",
         output_dir=output_dir,
         portfolio_path=str(portfolio_path),
+        market_data_path=str(market_data_path),
         chart_packet_dir=str(chart_dir),
         source_manifest_path=str(source_manifest_path),
         audit_profile="strict-core",
@@ -483,6 +496,7 @@ def main() -> None:
     parser.add_argument("--marketsurge-pdf-sha256", required=True)
     parser.add_argument("--snapshot-json-sha256", required=True)
     parser.add_argument("--snapshot-markdown-sha256", required=True)
+    parser.add_argument("--market-gauge-json-sha256", required=True)
     parser.add_argument("--worker-input-url", required=True)
     parser.add_argument("--worker-callback-url", required=True)
     parser.add_argument("--work-dir", default="dashboard-input")
@@ -504,6 +518,7 @@ def main() -> None:
             "marketsurge_pdf_sha256": args.marketsurge_pdf_sha256,
             "snapshot_json_sha256": args.snapshot_json_sha256,
             "snapshot_markdown_sha256": args.snapshot_markdown_sha256,
+            "market_gauge_json_sha256": args.market_gauge_json_sha256,
         },
     )
     try:
