@@ -201,9 +201,8 @@ def test_portfolio_fx_pair_is_preserved_but_not_sent_to_equities_provider():
     )
     assert [record["ticker"] for record in merged["records"]] == ["AUD/USD", "LLY"]
     chartable, unavailable = _partition_chart_symbols(["AUD/USD", "LLY"])
-    assert chartable == ["LLY"]
-    assert unavailable["AUD/USD"].startswith("UNSUPPORTED_CHART_ASSET_CLASS")
-    assert "substitution was attempted" in unavailable["AUD/USD"]
+    assert chartable == ["AUD/USD", "LLY"]
+    assert unavailable == {}
 
 
 def test_ocr_correction_rejects_fx_pair_with_page_and_source_context():

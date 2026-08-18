@@ -4,12 +4,11 @@ Standalone post-close chart packet generator for the Daily Market & Portfolio Re
 
 ## Purpose
 
-This repository is intentionally separate from TradingDashboard. It accepts a current-session ticker manifest, retrieves adjusted daily OHLCV from Alpaca, validates data freshness, calculates technical metrics, generates daily and weekly charts, and produces a PDF/JSON chart packet for the scheduled ChatGPT market review.
+This repository is intentionally separate from TradingDashboard. It accepts a current-session ticker manifest, retrieves bounded historical daily OHLCV from FMP, validates exact-session freshness, calculates technical metrics, generates daily and weekly charts, and produces a PDF/JSON chart packet for the scheduled market review.
 
 ## Required GitHub Actions secrets
 
-- `ALPACA_API_KEY`
-- `ALPACA_API_SECRET`
+- `FMP_API_KEY`
 
 Optional email delivery secrets:
 
@@ -38,8 +37,7 @@ The workflow uploads the packet as a GitHub Actions artifact. When the optional 
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export ALPACA_API_KEY=...
-export ALPACA_API_SECRET=...
+export FMP_API_KEY=...
 python -m market_chart_pipeline.cli --session-date 2026-08-04 --tickers AAPL,MSFT,NVDA --output-dir output
 ```
 
@@ -52,6 +50,14 @@ A ticker is not chart verified when:
 - OHLCV values are invalid;
 - the chart cannot be rendered;
 - the packet manifest and generated artifacts do not reconcile.
+
+FMP requests use the stable `historical-price-eod/full` endpoint with explicit
+`from` and `to` dates. The client applies bounded concurrency, a shared request
+cadence, and retry/backoff for 429 and transient 5xx responses. Historical
+reviews never substitute a live/current quote. Strict `AAA/BBB` FX identifiers
+are requested from FMP as `AAABBB`; the original display symbol remains frozen
+in packet provenance. FX price-only evidence is retained when FMP does not
+provide volume, while volume-dependent conclusions remain insufficient evidence.
 
 The quantitative gate is a ranking/rejection aid only. It never declares a stock actionable.
 

@@ -119,15 +119,21 @@ The transcript-derived sell hierarchy is deterministic:
 5. At thirteen weeks, inadequate progress can produce `REDUCE` under the
    patience rule.
 
-Future chart packets retain bounded daily OHLCV history so the review can
+Chart packets retain bounded FMP daily OHLCV history so the review can
 derive highest close, trading days held, and the first day a position reached
 20%. Older packets without that history remain explicitly
 `INSUFFICIENT_EVIDENCE` for those calculations.
+The stable `historical-price-eod/full` request always carries explicit `from`
+and `to` dates. Exact-session and 200-session history checks fail closed, and
+no current quote is used as a replacement. Strict `AAA/BBB` portfolio symbols
+are requested as FMP `AAABBB` while retaining the slash-form display symbol.
+If FMP omits FX volume, price, ATR, moving-average, and high evidence remain
+available, but every volume-derived field is marked insufficient evidence.
 
 ## Sell-rule sandbox charts
 
 The orchestrator creates one `assets/TICKER_sell_sandbox.png` for every open
-long equity position before freezing the packet. Each asset and its calculated
+long position before freezing the packet. Each asset and its calculated
 levels are recorded with a SHA-256 hash in the corresponding position result.
 Strict-core validation fails when any reported position lacks a verified
 sandbox chart.

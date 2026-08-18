@@ -20,7 +20,10 @@ def _history_frame(position: dict[str, Any]) -> pd.DataFrame:
     frame["date"] = pd.to_datetime(frame["date"])
     frame = frame.set_index("date").sort_index()
     frame = frame.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
-    return frame[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+    frame = frame[["Open", "High", "Low", "Close", "Volume"]]
+    frame[["Open", "High", "Low", "Close"]] = frame[["Open", "High", "Low", "Close"]].astype(float)
+    frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
+    return frame
 
 
 def _entry_index(frame: pd.DataFrame, entry_date: str) -> int:
@@ -44,6 +47,7 @@ def build_sell_sandbox_chart(
         raise ValidationError(f"{ticker}: entry price and date are required for the sell sandbox")
     entry = float(entry)
     full_frame = _history_frame(position)
+    volume_available = not full_frame["Volume"].isna().any()
     full_entry_index = _entry_index(full_frame, str(entry_date))
     context_start = max(0, full_entry_index - 80)
     frame = full_frame.iloc[context_start:].copy()
@@ -87,17 +91,20 @@ def build_sell_sandbox_chart(
 
     market_colors = mpf.make_marketcolors(up="#197A50", down="#C33E45", edge="inherit", wick="inherit", volume="inherit")
     style = mpf.make_mpf_style(base_mpf_style="yahoo", marketcolors=market_colors, gridcolor="#DCE3E8", gridstyle="--", facecolor="#FCFDFE")
+    plot_options: dict[str, Any] = {}
+    if volume_available:
+        plot_options["panel_ratios"] = (5, 1.2)
     figure, axes = mpf.plot(
         frame,
         type="candle",
-        volume=True,
+        volume=volume_available,
         mav=(21, 50),
         style=style,
         figsize=(13, 7.8),
-        panel_ratios=(5, 1.2),
         returnfig=True,
         tight_layout=True,
         xrotation=20,
+        **plot_options,
     )
     price_ax = axes[0]
     price_ax.set_xlim(-2, future_end + 2)
@@ -181,4 +188,5 @@ def build_sell_sandbox_chart(
             "profit_zone_upper": round(upper_target, 4) if upper_target is not None else None,
         },
         "time_boundaries": {"eight_week_trading_day": 40, "thirteen_week_trading_day": 65},
+        "volume_evidence": "VERIFIED" if volume_available else "INSUFFICIENT_EVIDENCE",
     }

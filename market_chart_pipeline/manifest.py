@@ -35,7 +35,6 @@ def _record_source_context(record: dict[str, Any]) -> str:
 @dataclass(frozen=True)
 class ManifestRequest:
     session_date: str
-    feed: str
     tickers: list[str]
     records_by_ticker: dict[str, dict[str, Any]]
     raw: dict[str, Any]
@@ -59,10 +58,6 @@ def load_manifest(path: str | Path) -> ManifestRequest:
         raise ValidationError("manifest session_date is invalid") from exc
     if normalized_date != session_date:
         raise ValidationError("manifest session_date must use YYYY-MM-DD")
-
-    feed = str(payload.get("feed", "iex")).lower()
-    if feed not in {"iex", "sip"}:
-        raise ValidationError("manifest feed must be iex or sip")
 
     records = payload.get("records")
     if not isinstance(records, list) or not records:
@@ -114,4 +109,4 @@ def load_manifest(path: str | Path) -> ManifestRequest:
             f"manifest unique_ticker_count={expected} does not match verified unique rows={len(tickers)}"
         )
 
-    return ManifestRequest(session_date, feed, tickers, by_ticker, payload)
+    return ManifestRequest(session_date, tickers, by_ticker, payload)

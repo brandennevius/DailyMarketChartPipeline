@@ -17,7 +17,6 @@ def valid_payload():
     return {
         "status": "COMPLETE",
         "session_date": "2026-08-04",
-        "feed": "iex",
         "unique_ticker_count": 1,
         "records": [
             {

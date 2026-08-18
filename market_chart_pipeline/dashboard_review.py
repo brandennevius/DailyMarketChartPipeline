@@ -286,7 +286,6 @@ def _manifest_from_corrections(
         "schema_version": "marketsurge_ocr_v2",
         "status": "COMPLETE_WITH_WARNINGS",
         "session_date": session_date,
-        "feed": "iex",
         "marketsurge_pdf_sha256": marketsurge_sha256,
         "unique_ticker_count": len(records),
         "records": [records[ticker] for ticker in sorted(records)],
@@ -299,13 +298,8 @@ def _partition_chart_symbols(tickers: list[str]) -> tuple[list[str], dict[str, s
     chartable: list[str] = []
     unavailable: dict[str, str] = {}
     for ticker in tickers:
-        if EQUITY_TICKER_RE.fullmatch(ticker):
+        if EQUITY_TICKER_RE.fullmatch(ticker) or FX_PAIR_RE.fullmatch(ticker):
             chartable.append(ticker)
-        elif FX_PAIR_RE.fullmatch(ticker):
-            unavailable[ticker] = (
-                "UNSUPPORTED_CHART_ASSET_CLASS: the exact-session equities OHLC provider does not "
-                "support FX pairs; no equity-symbol or live-price substitution was attempted."
-            )
         else:
             unavailable[ticker] = "UNSUPPORTED_CHART_IDENTIFIER: no deterministic chart provider mapping is configured."
     return chartable, unavailable
@@ -413,9 +407,7 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     chart_dir = work_dir / "chart-packet" / client.session_date
     requested_tickers = sorted(provenance)
     chartable_tickers, unavailable_tickers = _partition_chart_symbols(requested_tickers)
-    chart_payload = build_packet(
-        chartable_tickers, client.session_date, chart_dir, manifest.get("feed", "iex"), provenance
-    )
+    chart_payload = build_packet(chartable_tickers, client.session_date, chart_dir, provenance)
     chart_payload["requested_tickers"] = requested_tickers
     chart_payload.setdefault("errors", {}).update(unavailable_tickers)
     chart_payload["error_count"] = len(chart_payload["errors"])

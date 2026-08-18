@@ -60,3 +60,16 @@ def test_sell_sandbox_never_draws_unverified_pivot_zone(tmp_path: Path):
     assert asset["levels"]["pivot"] is None
     assert asset["levels"]["profit_zone_lower"] is None
     assert asset["levels"]["profit_zone_upper"] is None
+
+
+def test_sell_sandbox_renders_price_only_when_fx_volume_is_unavailable(tmp_path: Path):
+    position = _position(pivot=None)
+    position["ticker"] = "AUD/USD"
+    for row in position["price_history"]:
+        row["volume"] = None
+    output = tmp_path / "AUD_USD_sell_sandbox.png"
+    asset = build_sell_sandbox_chart(position, load_policy(), "2026-08-14", output)
+
+    assert output.stat().st_size > 10_000
+    assert asset["status"] == "verified"
+    assert asset["volume_evidence"] == "INSUFFICIENT_EVIDENCE"

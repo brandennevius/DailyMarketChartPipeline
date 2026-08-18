@@ -158,9 +158,18 @@ def enrich_positions_from_charts(
 
 
 def derive_market_breadth(chart_payload: dict[str, Any]) -> dict[str, Any]:
-    records = chart_payload.get("records") or []
+    all_records = chart_payload.get("records") or []
+    records = [
+        record
+        for record in all_records
+        if (record.get("metrics") or {}).get("asset_class", "EQUITY") == "EQUITY"
+    ]
     if not records:
-        return {"status": "insufficient_evidence", "verified_symbols": 0}
+        return {
+            "status": "insufficient_evidence",
+            "verified_symbols": 0,
+            "excluded_non_equity_instruments": len(all_records),
+        }
 
     def count(predicate) -> int:
         return sum(1 for record in records if predicate(record.get("metrics") or {}, record.get("technical_context") or {}))
@@ -175,7 +184,11 @@ def derive_market_breadth(chart_payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "partial_evidence",
         "scope": "MarketSurge-derived review universe; not the full exchange breadth",
+        "price_history_provider": chart_payload.get("chart_data_source"),
+        "price_history_endpoint": chart_payload.get("chart_data_endpoint"),
+        "live_quote_substitution": (chart_payload.get("chart_data_policy") or {}).get("live_quote_substitution"),
         "verified_symbols": total,
+        "excluded_non_equity_instruments": len(all_records) - total,
         "above_21d_pct": round(above_21 / total * 100, 1),
         "above_50d_pct": round(above_50 / total * 100, 1),
         "above_200d_pct": round(above_200 / total * 100, 1),
@@ -220,7 +233,12 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
             + (25 if metrics.get("sma50") and metrics.get("sma200") and metrics["sma50"] > metrics["sma200"] else 0)
             + (25 if base.get("status") == "CANDIDATE_ONLY" else 0)
         )
-        accumulation = _clamp(50 + (float(volume.get("up_down_volume_ratio_20") or 1) - 1) * 25)
+        volume_verified = volume.get("status") == "VERIFIED"
+        accumulation = (
+            _clamp(50 + (float(volume.get("up_down_volume_ratio_20") or 1) - 1) * 25)
+            if volume_verified
+            else 0
+        )
         earnings = fmp.get("earnings") or {}
         catalyst = 75 if earnings.get("earnings_status") == "VERIFIED" else 25
         candidate = {
@@ -242,6 +260,7 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "candidate_resistance_distance_pct": base.get("candidate_resistance_distance_pct"),
                 "pct_from_52w_high": metrics.get("pct_from_52w_high"),
                 "relative_volume": metrics.get("relative_volume"),
+                "volume_evidence_status": volume.get("status") or "INSUFFICIENT_EVIDENCE",
                 "average_dollar_volume": metrics.get("avg_dollar_volume_50"),
                 "quantitative_gate": metrics.get("quantitative_gate"),
                 "gate_reasons": metrics.get("gate_reasons") or [],

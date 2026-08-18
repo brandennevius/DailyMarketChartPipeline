@@ -59,6 +59,10 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
     }
     if payload.get("session_date") != session_date:
         result["errors"].append("Chart packet session date does not match review session")
+    if payload.get("chart_data_source") != "FMP":
+        result["errors"].append("Chart packet historical price provider is not FMP")
+    if (payload.get("chart_data_policy") or {}).get("live_quote_substitution") is not False:
+        result["errors"].append("Chart packet does not explicitly prohibit live quote substitution")
     if int(payload.get("verified_count", -1)) + int(payload.get("error_count", -1)) != len(requested):
         result["errors"].append("Chart packet requested/verified/error counts do not reconcile")
     expected_pdf_hash = payload.get("artifacts", {}).get("pdf_sha256")
@@ -75,6 +79,9 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
             "requested_tickers": sorted(requested),
             "verified_tickers": sorted(verified),
             "pdf_sha256": actual_pdf_hash,
+            "price_history_provider": payload.get("chart_data_source"),
+            "price_history_endpoint": payload.get("chart_data_endpoint"),
+            "live_quote_substitution": (payload.get("chart_data_policy") or {}).get("live_quote_substitution"),
         }
     )
     return result

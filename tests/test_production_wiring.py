@@ -55,6 +55,9 @@ def _snapshot():
 def _chart_payload(pdf_hash):
     return {
         "session_date": SESSION,
+        "chart_data_source": "FMP",
+        "chart_data_endpoint": "stable/historical-price-eod/full",
+        "chart_data_policy": {"live_quote_substitution": False},
         "status": "COMPLETE_WITH_WARNINGS",
         "requested_tickers": ["MSFT", "MISS"],
         "verified_count": 1,
@@ -171,6 +174,9 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     requested = ["MSFT", *tickers]
     payload = {
         "session_date": SESSION,
+        "chart_data_source": "FMP",
+        "chart_data_endpoint": "stable/historical-price-eod/full",
+        "chart_data_policy": {"live_quote_substitution": False},
         "status": "COMPLETE",
         "requested_tickers": requested,
         "verified_count": len(requested),

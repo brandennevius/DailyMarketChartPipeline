@@ -389,7 +389,7 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
             for key in [
                 "company_name", "sector", "current_price", "candidate_resistance",
                 "candidate_resistance_distance_pct", "pct_from_52w_high", "relative_volume",
-                "average_dollar_volume", "quantitative_gate", "gate_reasons", "rs_trend",
+                "average_dollar_volume", "volume_evidence_status", "quantitative_gate", "gate_reasons", "rs_trend",
                 "earnings_date", "source_labels",
                 "daily_chart_asset",
             ]

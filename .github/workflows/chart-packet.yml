@@ -15,12 +15,6 @@ on:
         description: Comma-separated tickers, manual ticker mode only
         required: false
         type: string
-      feed:
-        description: Alpaca market-data feed
-        required: true
-        default: iex
-        type: choice
-        options: [iex, sip]
       replay_processed_manifest:
         description: Rebuild an already processed manifest without replacing its receipt
         required: false
@@ -50,8 +44,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-      ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -74,7 +66,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          required = ['ALPACA_API_KEY','ALPACA_API_SECRET','FMP_API_KEY']
+          required = ['FMP_API_KEY']
           if os.environ.get('DRY_RUN', '').lower() != 'true':
               required += ['GMAIL_ADDRESS','GMAIL_APP_PASSWORD','CHART_PACKET_RECIPIENT']
           missing = [name for name in required if not os.getenv(name)]
@@ -88,7 +80,6 @@ jobs:
           MANUAL_MANIFEST: ${{ inputs.manifest_path }}
           MANUAL_DATE: ${{ inputs.session_date }}
           MANUAL_TICKERS: ${{ inputs.tickers }}
-          MANUAL_FEED: ${{ inputs.feed }}
           FORCE_REPLAY: ${{ inputs.replay_processed_manifest }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -186,7 +177,6 @@ jobs:
                   'mode=manual',
                   f'session_date={session_date}',
                   f'tickers={tickers}',
-                  f"feed={os.environ.get('MANUAL_FEED') or 'iex'}",
               ]
 
           with out.open('a') as f:
@@ -204,7 +194,6 @@ jobs:
           python -m market_chart_pipeline.cli \
             --session-date "${{ steps.request.outputs.session_date }}" \
             --tickers "${{ steps.request.outputs.tickers }}" \
-            --feed "${{ steps.request.outputs.feed }}" \
             --output-dir output
       - name: Upload packet
         id: upload

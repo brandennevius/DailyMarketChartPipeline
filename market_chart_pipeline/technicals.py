@@ -52,6 +52,17 @@ def _rs_metrics(rs: pd.Series) -> dict[str, Any]:
 
 
 def _volume_metrics(df: pd.DataFrame) -> dict[str, Any]:
+    if "Volume" not in df or df["Volume"].isna().any():
+        return {
+            "status": "INSUFFICIENT_EVIDENCE",
+            "reason": "FMP historical volume is unavailable for this instrument.",
+            "up_volume_20": None,
+            "down_volume_20": None,
+            "up_down_volume_ratio_20": None,
+            "accumulation_days_20": None,
+            "distribution_days_20": None,
+            "accumulation_distribution_estimate": "INSUFFICIENT_EVIDENCE",
+        }
     recent = df.tail(21).copy()
     changes = recent["Close"].pct_change()
     up_volume = float(recent.loc[changes > 0, "Volume"].sum())
@@ -61,6 +72,7 @@ def _volume_metrics(df: pd.DataFrame) -> dict[str, Any]:
     accumulation = int(((changes >= 0.002) & (recent["Volume"] > prev_volume)).sum())
     distribution = int(((changes <= -0.002) & (recent["Volume"] > prev_volume)).sum())
     return {
+        "status": "VERIFIED",
         "up_volume_20": up_volume,
         "down_volume_20": down_volume,
         "up_down_volume_ratio_20": ratio,
@@ -82,7 +94,7 @@ def _base_candidate(df: pd.DataFrame) -> dict[str, Any]:
     cannot be supported from price history alone.
     """
     weekly = df.resample("W-FRI").agg({
-        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
+        "Open": "first", "High": "max", "Low": "min", "Close": "last"
     }).dropna()
     if len(weekly) < 20:
         return {"status": "INSUFFICIENT_EVIDENCE"}
@@ -130,7 +142,7 @@ def calculate_technical_context(df: pd.DataFrame, rs: pd.Series) -> dict[str, An
     sma200 = close.rolling(200).mean()
 
     weekly = df.resample("W-FRI").agg({
-        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
+        "Open": "first", "High": "max", "Low": "min", "Close": "last"
     }).dropna()
     ma10w = weekly["Close"].rolling(10).mean()
     ma40w = weekly["Close"].rolling(40).mean()

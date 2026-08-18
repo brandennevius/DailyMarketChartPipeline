@@ -132,6 +132,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
         f"- Regime: {packet.get('market_regime', {}).get('classification')} (index follow-through/distribution evidence was not supplied).",
         f"- Dashboard Market Gauge posture: {packet.get('market_regime', {}).get('dashboard_market_gauge_posture') or 'unavailable'}; this is supporting trend evidence, not a substitute for O'Neil distribution/follow-through evidence.",
         f"- Exposure: {packet.get('exposure_guidance', {}).get('statement') or 'Exact exposure is indeterminate because market-permission evidence is incomplete.'}",
+        f"- Historical price evidence: {breadth.get('price_history_provider') or 'unavailable'} via {breadth.get('price_history_endpoint') or 'unavailable'}; live/current quote substitution: {'prohibited' if breadth.get('live_quote_substitution') is False else 'not verified'}.",
         f"- Review universe: {breadth.get('verified_symbols', 0)} verified symbols; above 21d {breadth.get('above_21d_pct', '-')}%; above 50d {breadth.get('above_50d_pct', '-')}%; above 200d {breadth.get('above_200d_pct', '-')}%.",
         "",
         "## Portfolio Actions",
@@ -292,6 +293,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     story.extend([Spacer(1, 10), _p("Market and leadership evidence", styles["h1"])])
     posture = packet.get("market_regime", {}).get("dashboard_market_gauge_posture") or "unavailable"
     story.append(_p(f"A confirmed O'Neil market regime is unavailable because index follow-through and distribution-day evidence was not supplied. The frozen Dashboard Market Gauge posture is {posture}; it is supporting trend evidence only. The breadth below describes only the verified MarketSurge-derived review universe and should not be treated as full-exchange breadth.", styles["body"]))
+    story.append(_p(f"Historical price evidence: {breadth.get('price_history_provider') or 'unavailable'} via {breadth.get('price_history_endpoint') or 'unavailable'}. Live/current quote substitution is prohibited.", styles["body"]))
     story.append(_p(packet.get("exposure_guidance", {}).get("statement") or "Exact exposure is indeterminate because market-permission evidence is incomplete.", styles["body"]))
     breadth_rows = [
         ["Verified", "Above 21d", "Above 50d", "Above 200d", "RS rising", "Positive A/D", "Chart priority"],

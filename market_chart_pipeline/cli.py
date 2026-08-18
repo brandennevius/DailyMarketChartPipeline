@@ -15,25 +15,22 @@ def main() -> None:
     source.add_argument("--tickers", help="Comma-separated tickers for manual testing only")
     parser.add_argument("--session-date")
     parser.add_argument("--output-dir", default="output")
-    parser.add_argument("--feed", choices=["iex", "sip"])
     args = parser.parse_args()
 
     provenance = None
     if args.manifest:
         request = load_manifest(args.manifest)
         session_date = request.session_date
-        feed = args.feed or request.feed
         tickers = request.tickers
         provenance = {ticker: record["sources"] for ticker, record in request.records_by_ticker.items()}
     else:
         if not args.session_date:
             raise ValidationError("--session-date is required with --tickers")
         session_date = args.session_date
-        feed = args.feed or "iex"
         tickers = [x.strip().upper() for x in args.tickers.split(",") if x.strip()]
 
     output_dir = Path(args.output_dir) / session_date
-    result = build_packet(tickers, session_date, output_dir, feed, provenance)
+    result = build_packet(tickers, session_date, output_dir, provenance)
     if args.manifest:
         result["source_manifest"] = {
             "path": str(args.manifest),
