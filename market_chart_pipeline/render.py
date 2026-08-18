@@ -77,6 +77,14 @@ def _p(text: Any, style: ParagraphStyle) -> Paragraph:
     return Paragraph(escape(str(text)), style)
 
 
+def _linked_p(prefix: str, title: str, url: str, suffix: str, style: ParagraphStyle) -> Paragraph:
+    safe_url = escape(str(url), {'"': "&quot;"})
+    return Paragraph(
+        f"{escape(prefix)}<link href=\"{safe_url}\" color=\"#2E6F9E\">{escape(title)}</link>{escape(suffix)}",
+        style,
+    )
+
+
 def _event(result: dict[str, Any], rule: str) -> dict[str, Any]:
     return next((item for item in result.get("events", []) if item.get("rule") == rule), {})
 
@@ -96,6 +104,7 @@ def _headline(packet: dict[str, Any]) -> str:
 
 
 def _review_candidates(packet: dict[str, Any], limit: int | None = None) -> list[dict[str, Any]]:
+    """Distinct non-portfolio names, ordered priority gate, score, then ticker."""
     positions = set(packet.get("input_sets", {}).get("portfolio_tickers", []))
     candidates = [item for item in packet.get("candidate_results", []) if item.get("ticker") not in positions]
     candidates.sort(
@@ -108,6 +117,15 @@ def _review_candidates(packet: dict[str, Any], limit: int | None = None) -> list
     return candidates if limit is None else candidates[:limit]
 
 
+def _first_chart_candidates(packet: dict[str, Any], limit: int = 4) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in _review_candidates(packet)
+        if item.get("snapshot", {}).get("quantitative_gate") == "CHART_REVIEW_PRIORITY"
+        and item.get("snapshot", {}).get("daily_chart_asset")
+    ][:limit]
+
+
 def _watchlist_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
     """Return every watchlist-derived result; this list must never be rank-truncated."""
     return sorted(
@@ -116,9 +134,40 @@ def _watchlist_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def _candidate_action_label(item: dict[str, Any]) -> str:
+    if item.get("origin") != "open_position" and item.get("classification") == "WATCH" and item.get("action") == "HOLD":
+        return "NO ACTION"
+    return str(item.get("action") or "-")
+
+
+def _pivot_gap_text(item: dict[str, Any], limit: int | None = None) -> str:
+    missing = list(item.get("snapshot", {}).get("pivot_missing_evidence") or [])
+    labels = {
+        "current_session_chart_history": "current-session chart history",
+        "prior_uptrend": "prior uptrend",
+        "conventional_base_type": "base type",
+        "base_stage": "base stage",
+        "handle_quality_where_applicable": "handle quality",
+        "weekly_structure": "weekly structure",
+        "volume_contraction": "volume contraction",
+        "exact_pivot_price": "exact pivot",
+        "breakout_volume_confirmation": "breakout volume",
+    }
+    missing = [labels.get(value, str(value).replace("_", " ")) for value in missing]
+    if limit is not None and len(missing) > limit:
+        return ", ".join(missing[:limit]) + f" (+{len(missing) - limit} more)"
+    return ", ".join(missing) or "none"
+
+
+def _markdown_link(title: str, url: str) -> str:
+    return f"[{title.replace('[', '(').replace(']', ')')}]({url.replace(')', '%29')})"
+
+
 def render_markdown(packet: dict[str, Any]) -> str:
     risk = packet.get("portfolio_risk", {})
     breadth = packet.get("market_breadth", {})
+    regime = packet.get("market_regime", {})
+    cross_market = packet.get("cross_market_context", {})
     lines = [
         f"# Daily Market & Portfolio Review - {packet['session_date']}",
         "",
@@ -129,14 +178,53 @@ def render_markdown(packet: dict[str, Any]) -> str:
         f"- Remaining risk to stops: {_money(risk.get('total_remaining_risk_to_stops'))} ({_pct(risk.get('total_remaining_risk_pct'))} of equity).",
         "",
         "## Market And Leadership Breadth",
-        f"- Regime: {packet.get('market_regime', {}).get('classification')} (index follow-through/distribution evidence was not supplied).",
-        f"- Dashboard Market Gauge posture: {packet.get('market_regime', {}).get('dashboard_market_gauge_posture') or 'unavailable'}; this is supporting trend evidence, not a substitute for O'Neil distribution/follow-through evidence.",
-        f"- Exposure: {packet.get('exposure_guidance', {}).get('statement') or 'Exact exposure is indeterminate because market-permission evidence is incomplete.'}",
+        f"- Dashboard Gauge posture: {regime.get('dashboard_market_gauge_posture') or 'unavailable'} (score {_number(regime.get('dashboard_market_gauge_score'))}; generated {regime.get('dashboard_market_gauge_generated_at') or 'unavailable'}).",
+        "- Dashboard Gauge scope: exact-session trend and extension context. It is not an O'Neil market-regime classification.",
+        f"- Dashboard Gauge providers: {', '.join(regime.get('dashboard_market_gauge_providers') or []) or 'unavailable'}.",
         f"- Historical price evidence: {breadth.get('price_history_provider') or 'unavailable'} via {breadth.get('price_history_endpoint') or 'unavailable'}; live/current quote substitution: {'prohibited' if breadth.get('live_quote_substitution') is False else 'not verified'}.",
         f"- Review universe: {breadth.get('verified_symbols', 0)} verified symbols; above 21d {breadth.get('above_21d_pct', '-')}%; above 50d {breadth.get('above_50d_pct', '-')}%; above 200d {breadth.get('above_200d_pct', '-')}%.",
-        "",
-        "## Portfolio Actions",
     ]
+    for index in regime.get("dashboard_market_gauge_indexes") or []:
+        lines.append(
+            f"- {index.get('symbol')}: close {_number(index.get('close'))}; "
+            f"21EMA {_number(index.get('ema21'))} ({_pct(index.get('distance_above_21d_pct'))}); "
+            f"50SMA {_number(index.get('sma50'))} ({_pct(index.get('distance_above_50d_pct'))}); "
+            f"200SMA {_number(index.get('sma200'))}; trends {index.get('short_term_trend')}/{index.get('medium_term_trend')}/{index.get('long_term_trend')}; "
+            f"extension {index.get('extension')}; as of {index.get('price_session')} (source generated {index.get('source_generated_at') or 'unavailable'})."
+        )
+    for component in regime.get("dashboard_market_gauge_components") or []:
+        lines.append(
+            f"- Gauge component {component.get('label') or 'unnamed'}: {component.get('state') or 'unavailable'}; "
+            f"{component.get('detail') or 'detail unavailable'}."
+        )
+    lines.extend(
+        [
+            f"- O'Neil regime evidence: {regime.get('classification')}; follow-through-day and distribution-day inputs are unavailable.",
+            f"- Exposure guidance: {packet.get('exposure_guidance', {}).get('statement') or 'Exact exposure is indeterminate because market-permission evidence is incomplete.'}",
+            "",
+            "## Cross-Market Context",
+            f"- Status: {cross_market.get('status') or 'INSUFFICIENT_EVIDENCE'}; provider FMP; window {(cross_market.get('lookback_window') or {}).get('start_date') or '-'} through {(cross_market.get('lookback_window') or {}).get('end_date') or '-'} (America/New_York calendar dates).",
+            "- Interpretation only: this section cannot override regime, exposure, portfolio, candidate, or sell-rule actions.",
+        ]
+    )
+    for article in cross_market.get("cited_context") or []:
+        themes = ", ".join(article.get("themes") or []) or "unclassified"
+        lines.append(
+            f"- [{str(article.get('category') or '').upper()}] {_markdown_link(str(article.get('title') or 'Untitled'), str(article.get('url') or ''))} "
+            f"— {article.get('publisher') or 'publisher unavailable'}, {article.get('published_at') or 'time unavailable'}; themes: {themes}."
+        )
+    treasury = cross_market.get("treasury_context") or {}
+    if treasury:
+        rates = treasury.get("maturities_pct") or {}
+        lines.append(f"- Treasury context {treasury.get('date')}: 2Y {_number(rates.get('year2'))}%; 10Y {_number(rates.get('year10'))}%; 30Y {_number(rates.get('year30'))}%.")
+    for event in (cross_market.get("economic_calendar") or [])[:5]:
+        lines.append(
+            f"- Economic calendar: {event.get('date')} {event.get('country') or '-'} {event.get('event')}; "
+            f"actual {event.get('actual') if event.get('actual') is not None else '-'}, estimate {event.get('estimate') if event.get('estimate') is not None else '-'}, impact {event.get('impact') or '-'}."
+        )
+    if cross_market.get("evidence_gaps"):
+        lines.append(f"- Insufficient evidence: {'; '.join(cross_market['evidence_gaps'])}.")
+    lines.extend(["", "## Portfolio Actions"])
     for result in packet.get("sell_rule_results", []):
         snap = result.get("position_snapshot", {})
         lines.append(
@@ -158,15 +246,21 @@ def render_markdown(packet: dict[str, Any]) -> str:
         chart_status = "verified chart record" if item.get("ticker") in packet.get("chart_verification", {}).get("verified_tickers", []) else "chart evidence unavailable"
         lines.append(
             f"- **{item['ticker']}** - origin WATCHLIST; source {labels}; result {item.get('classification')}; "
-            f"action {item.get('action')}; {chart_status}; {item.get('rationale')}"
+            f"action {_candidate_action_label(item)}; {chart_status}; visual resistance {_money(snap.get('candidate_resistance'), 2)} "
+            f"({_pct(snap.get('candidate_resistance_distance_pct'))}); missing pivot proof: {_pivot_gap_text(item)}."
         )
-    lines.extend(["", "## Visual Review Queue", "- These are research priorities, not buy signals. All require visual pivot confirmation."])
+    lines.extend([
+        "",
+        "## Visual Review Queue",
+        "- Membership: every distinct scanner/watchlist candidate after excluding any ticker analyzed as an open long. Unsupported portfolio instruments are not appended.",
+        "- Order: CHART_REVIEW_PRIORITY first, then internal score descending, then ticker. These are research priorities, not buy signals.",
+    ])
     for item in _review_candidates(packet):
         snap = item.get("snapshot", {})
         lines.append(
             f"- **{item['ticker']}**: score {item['internal_canslim_score']}; price {_money(snap.get('current_price'), 2)}; "
             f"visual resistance {_money(snap.get('candidate_resistance'), 2)}; RS {snap.get('rs_trend') or '-'}; "
-            f"earnings {snap.get('earnings_date') or '-'}"
+            f"earnings {snap.get('earnings_date') or '-'}; missing pivot proof: {_pivot_gap_text(item)}"
         )
     lines.extend(
         [
@@ -268,6 +362,8 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     session = packet["session_date"]
     risk = packet.get("portfolio_risk", {})
     breadth = packet.get("market_breadth", {})
+    regime = packet.get("market_regime", {})
+    cross_market = packet.get("cross_market_context", {})
     results = packet.get("sell_rule_results", [])
 
     story.append(_p("Daily Market & Portfolio Review", styles["title"]))
@@ -291,10 +387,36 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         action_rows.append([result["ticker"], result["action"], _pct(result.get("gain_pct")), _number(snap.get("open_r_multiple")), _money(snap.get("stop_price"), 2), _money(snap.get("take_profit"), 2), result.get("rationale", "")])
     story.append(_table(action_rows, [0.55 * inch, 0.65 * inch, 0.58 * inch, 0.48 * inch, 0.65 * inch, 0.7 * inch, 2.95 * inch], styles, {2, 3, 4, 5}))
     story.extend([Spacer(1, 10), _p("Market and leadership evidence", styles["h1"])])
-    posture = packet.get("market_regime", {}).get("dashboard_market_gauge_posture") or "unavailable"
-    story.append(_p(f"A confirmed O'Neil market regime is unavailable because index follow-through and distribution-day evidence was not supplied. The frozen Dashboard Market Gauge posture is {posture}; it is supporting trend evidence only. The breadth below describes only the verified MarketSurge-derived review universe and should not be treated as full-exchange breadth.", styles["body"]))
+    posture = regime.get("dashboard_market_gauge_posture") or "unavailable"
+    story.append(_p(f"Dashboard Gauge posture: {posture} (score {_number(regime.get('dashboard_market_gauge_score'))}; generated {regime.get('dashboard_market_gauge_generated_at') or 'unavailable'}). This is exact-session trend and extension evidence, not an O'Neil regime classification.", styles["body"]))
+    story.append(_p(f"Dashboard Gauge providers: {', '.join(regime.get('dashboard_market_gauge_providers') or []) or 'unavailable'}.", styles["small"]))
+    gauge_rows = [["Index", "Close", "21EMA / dist.", "50SMA / dist.", "200SMA", "Trend S/M/L", "Extension", "As of"]]
+    for index in regime.get("dashboard_market_gauge_indexes") or []:
+        gauge_rows.append([
+            index.get("symbol") or "-",
+            _number(index.get("close")),
+            f"{_number(index.get('ema21'))} / {_pct(index.get('distance_above_21d_pct'))}",
+            f"{_number(index.get('sma50'))} / {_pct(index.get('distance_above_50d_pct'))}",
+            _number(index.get("sma200")),
+            f"{index.get('short_term_trend') or '-'}/{index.get('medium_term_trend') or '-'}/{index.get('long_term_trend') or '-'}",
+            index.get("extension") or "-",
+            index.get("price_session") or "-",
+        ])
+    if len(gauge_rows) > 1:
+        story.append(_table(gauge_rows, [0.48 * inch, 0.62 * inch, 1.0 * inch, 1.0 * inch, 0.72 * inch, 0.85 * inch, 0.72 * inch, 0.72 * inch], styles, {1, 2, 3, 4}))
+    component_rows = [["Gauge component", "State", "Frozen detail"]]
+    for component in regime.get("dashboard_market_gauge_components") or []:
+        component_rows.append([
+            component.get("label") or "-",
+            component.get("state") or "-",
+            component.get("detail") or "detail unavailable",
+        ])
+    if len(component_rows) > 1:
+        story.append(Spacer(1, 4))
+        story.append(_table(component_rows, [1.2 * inch, 0.75 * inch, 4.85 * inch], styles))
+    story.append(_p("O'Neil regime evidence: INSUFFICIENT_EVIDENCE. Follow-through-day and distribution-day series were not supplied; those missing inputs are not inferred from the Dashboard Gauge.", styles["body"]))
     story.append(_p(f"Historical price evidence: {breadth.get('price_history_provider') or 'unavailable'} via {breadth.get('price_history_endpoint') or 'unavailable'}. Live/current quote substitution is prohibited.", styles["body"]))
-    story.append(_p(packet.get("exposure_guidance", {}).get("statement") or "Exact exposure is indeterminate because market-permission evidence is incomplete.", styles["body"]))
+    story.append(_p(f"Exposure guidance (separate): {packet.get('exposure_guidance', {}).get('statement') or 'Exact exposure is indeterminate because market-permission evidence is incomplete.'}", styles["body"]))
     breadth_rows = [
         ["Verified", "Above 21d", "Above 50d", "Above 200d", "RS rising", "Positive A/D", "Chart priority"],
         [str(breadth.get("verified_symbols", 0)), f"{breadth.get('above_21d_pct', '-')}%", f"{breadth.get('above_50d_pct', '-')}%", f"{breadth.get('above_200d_pct', '-')}%", f"{breadth.get('rs_rising_pct', '-')}%", f"{breadth.get('positive_accumulation_pct', '-')}%", str(breadth.get("chart_review_priority_count", 0))],
@@ -302,6 +424,29 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     story.append(_table(breadth_rows, [0.78 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 0.88 * inch, 0.95 * inch, 0.95 * inch], styles, set(range(7))))
     story.append(Spacer(1, 8))
     story.append(_p("Entry posture: no candidate is eligible for ADD. The review queue on the following pages is ranked research, and every resistance level still requires visual pivot confirmation.", styles["body"]))
+
+    story.append(_p("Cross-Market Context", styles["h1"]))
+    window = cross_market.get("lookback_window") or {}
+    story.append(_p(
+        f"Status {cross_market.get('status') or 'INSUFFICIENT_EVIDENCE'} | FMP | {window.get('start_date') or '-'} through {window.get('end_date') or '-'} New York calendar dates. Interpretation only: this context cannot override regime, exposure, portfolio, candidate, or sell-rule actions.",
+        styles["body"],
+    ))
+    for article in (cross_market.get("cited_context") or [])[:8]:
+        suffix = f" - {article.get('publisher') or 'publisher unavailable'}, {article.get('published_at') or 'time unavailable'} [{str(article.get('category') or '').upper()}]"
+        _article_title = str(article.get("title") or "Untitled")
+        _article_url = str(article.get("url") or "")
+        if _article_url:
+            story.append(_linked_p("• ", _article_title, _article_url, suffix, styles["small"]))
+        else:
+            story.append(_p(f"• {_article_title}{suffix}", styles["small"]))
+    treasury = cross_market.get("treasury_context") or {}
+    if treasury:
+        rates = treasury.get("maturities_pct") or {}
+        story.append(_p(f"Treasury {treasury.get('date')}: 2Y {_number(rates.get('year2'))}% | 10Y {_number(rates.get('year10'))}% | 30Y {_number(rates.get('year30'))}%.", styles["small"]))
+    for event in (cross_market.get("economic_calendar") or [])[:5]:
+        story.append(_p(f"Economic calendar: {event.get('date')} {event.get('country') or '-'} {event.get('event')} | actual {event.get('actual') if event.get('actual') is not None else '-'} | estimate {event.get('estimate') if event.get('estimate') is not None else '-'} | impact {event.get('impact') or '-' }.", styles["small"]))
+    if cross_market.get("evidence_gaps"):
+        story.append(_p(f"INSUFFICIENT_EVIDENCE: {'; '.join(cross_market['evidence_gaps'])}.", styles["small"]))
 
     story.append(PageBreak())
     story.append(_p("Position Review", styles["title"]))
@@ -352,27 +497,26 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     watchlist = _watchlist_candidates(packet)
     story.append(PageBreak())
     story.append(_p(f"Brandens Watchlist - Complete Results ({len(watchlist)})", styles["title"]))
-    story.append(_p("Every MarketSurge source row labeled BRANDENS WATCHLIST is shown. Ranking never truncates this provenance audit.", styles["subtitle"]))
-    watchlist_rows = [["Ticker", "Origin", "Source label(s)", "Result", "Action", "Chart evidence", "Reason"]]
+    story.append(_p("Every MarketSurge source row labeled BRANDENS WATCHLIST is shown alphabetically. Coverage is complete and is never truncated by rank.", styles["subtitle"]))
+    watchlist_rows = [["Ticker", "Origin / source", "Result / action", "Chart", "Resistance / dist.", "Missing pivot evidence"]]
     verified_tickers = set(packet.get("chart_verification", {}).get("verified_tickers", []))
     for item in watchlist:
         snap = item.get("snapshot", {})
         watchlist_rows.append([
             item.get("ticker"),
-            "WATCHLIST",
-            ", ".join(snap.get("source_labels") or []) or "BRANDENS WATCHLIST",
-            item.get("classification"),
-            item.get("action"),
+            f"WATCHLIST\n{', '.join(snap.get('source_labels') or []) or 'BRANDENS WATCHLIST'}",
+            f"{item.get('classification')}\n{_candidate_action_label(item)}",
             "verified" if item.get("ticker") in verified_tickers else "unavailable",
-            item.get("rationale"),
+            f"{_money(snap.get('candidate_resistance'), 2)}\n{_pct(snap.get('candidate_resistance_distance_pct'))}",
+            _pivot_gap_text(item),
         ])
     if len(watchlist_rows) == 1:
-        watchlist_rows.append(["-", "WATCHLIST", "No watchlist rows supplied", "-", "-", "-", "-"])
-    story.append(_table(watchlist_rows, [0.55 * inch, 0.62 * inch, 1.25 * inch, 0.68 * inch, 0.55 * inch, 0.75 * inch, 2.4 * inch], styles))
+        watchlist_rows.append(["-", "WATCHLIST", "No rows supplied", "-", "-", "-"])
+    story.append(_table(watchlist_rows, [0.5 * inch, 1.35 * inch, 1.15 * inch, 0.6 * inch, 0.9 * inch, 2.4 * inch], styles))
 
     story.append(PageBreak())
     story.append(_p("Visual Review Queue", styles["title"]))
-    story.append(_p("Research priorities only. Candidate resistance is an algorithmic visual reference, not a verified pivot, and does not authorize a purchase.", styles["subtitle"]))
+    story.append(_p("Membership: every distinct scanner/watchlist candidate after excluding any ticker analyzed as an open long. Order: CHART_REVIEW_PRIORITY first, then internal score descending, then ticker. Unsupported portfolio instruments are not appended. Candidate resistance is an algorithmic visual reference, not a verified pivot.", styles["subtitle"]))
     candidate_rows = [["Ticker", "Company / sector", "Score", "Price", "Visual resistance", "Dist.", "RS", "Rel vol", "Earnings"]]
     for item in _review_candidates(packet):
         snap = item.get("snapshot", {})
@@ -382,13 +526,13 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             item.get("ticker"), f"{company}\n{sector}", _number(item.get("internal_canslim_score")), _money(snap.get("current_price"), 2), _money(snap.get("candidate_resistance"), 2), _pct(snap.get("candidate_resistance_distance_pct")), snap.get("rs_trend") or "-", _number(snap.get("relative_volume")), snap.get("earnings_date") or "-",
         ])
     story.append(_table(candidate_rows, [0.48 * inch, 1.65 * inch, 0.5 * inch, 0.62 * inch, 0.78 * inch, 0.55 * inch, 0.53 * inch, 0.55 * inch, 0.72 * inch], styles, {2, 3, 4, 5, 7}))
-    story.extend([Spacer(1, 10), _p("How to use this queue", styles["h1"]), _p("Start with CHART_REVIEW_PRIORITY names, confirm a proper base and exact pivot on the current daily and weekly charts, reject extended entries, and verify earnings and liquidity before any action. The deterministic system remains HOLD until those gates are satisfied.", styles["body"])])
+    story.extend([Spacer(1, 10), _p("How to use this queue", styles["h1"]), _p("Start with CHART_REVIEW_PRIORITY names, confirm a proper base and exact pivot on the current daily and weekly charts, reject extended entries, and verify earnings and liquidity before any action. Non-owned WATCH names remain NO ACTION until those gates are satisfied.", styles["body"])])
 
-    chart_candidates = [item for item in _review_candidates(packet, 8) if item.get("snapshot", {}).get("daily_chart_asset")][:4]
+    chart_candidates = _first_chart_candidates(packet, 4)
     if chart_candidates and chart_dir:
         story.append(PageBreak())
         story.append(_p("First Charts to Review", styles["title"]))
-        story.append(_p("Chart-review priority in ranked order. Resistance labels remain visual references, not verified pivots.", styles["subtitle"]))
+        story.append(_p("Up to the first four chart-backed CHART_REVIEW_PRIORITY names, ordered by internal score descending and ticker. Resistance labels remain visual references, not verified pivots.", styles["subtitle"]))
         chart_cells = []
         for item in chart_candidates:
             snap = item.get("snapshot", {})

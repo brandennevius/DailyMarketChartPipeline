@@ -1,10 +1,16 @@
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
 from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
-from market_chart_pipeline.render import audit_rendered_pdf, render_markdown, render_pdf
+from market_chart_pipeline.render import (
+    _first_chart_candidates,
+    audit_rendered_pdf,
+    render_markdown,
+    render_pdf,
+)
 
 
 SESSION = "2026-08-14"
@@ -193,6 +199,7 @@ def test_complete_watchlist_and_position_failure_pages_are_rendered(tmp_path: Pa
     markdown = render_markdown(packet)
     assert "Complete Results (15)" in markdown
     assert all(f"**{item['ticker']}**" in markdown for item in watchlist)
+    assert markdown.count("result WATCH; action NO ACTION") == 15
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(render_pdf(packet, report_dir=tmp_path))
     evidence = audit_rendered_pdf(pdf_path, packet)
@@ -201,3 +208,106 @@ def test_complete_watchlist_and_position_failure_pages_are_rendered(tmp_path: Pa
     text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf_path)).pages)
     assert "SELL-RULE SANDBOX UNAVAILABLE - FAIL" in text
     assert "FAIL daily chart through" not in text
+
+
+def test_first_charts_are_only_the_top_four_chart_review_priority_names():
+    def candidate(ticker, score, gate, chart=True):
+        return {
+            "ticker": ticker,
+            "origin": "scanner",
+            "internal_canslim_score": score,
+            "snapshot": {
+                "quantitative_gate": gate,
+                "daily_chart_asset": {"file": f"charts/{ticker}.png", "sha256": "x"} if chart else None,
+            },
+        }
+
+    packet = {
+        "candidate_results": [
+            candidate("NONPRIORITY", 99, "CHART_REVIEW"),
+            candidate("AAA", 80, "CHART_REVIEW_PRIORITY"),
+            candidate("BBB", 90, "CHART_REVIEW_PRIORITY"),
+            candidate("CCC", 70, "CHART_REVIEW_PRIORITY"),
+            candidate("DDD", 60, "CHART_REVIEW_PRIORITY"),
+            candidate("EEE", 50, "CHART_REVIEW_PRIORITY"),
+            candidate("NOCHART", 100, "CHART_REVIEW_PRIORITY", chart=False),
+        ],
+        "input_sets": {"portfolio_tickers": []},
+    }
+
+    assert [item["ticker"] for item in _first_chart_candidates(packet)] == ["BBB", "AAA", "CCC", "DDD"]
+
+
+def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
+    packet = {
+        "session_date": SESSION,
+        "policy_version": "test-policy",
+        "packet_sha256": "a" * 64,
+        "audit_profile": "standard",
+        "market_regime": {
+            "classification": "INSUFFICIENT_EVIDENCE",
+            "dashboard_market_gauge_posture": "Neutral",
+            "dashboard_market_gauge_score": 52.5,
+            "dashboard_market_gauge_generated_at": "2026-08-14T21:00:00Z",
+            "dashboard_market_gauge_providers": ["Stooq", "Yahoo fallback"],
+            "dashboard_market_gauge_components": [{"label": "Short term", "state": "Neutral", "detail": "Mixed indexes versus 21EMA"}],
+            "dashboard_market_gauge_indexes": [
+                {
+                    "symbol": symbol,
+                    "close": 100,
+                    "ema21": 99,
+                    "sma50": 98,
+                    "sma200": 90,
+                    "distance_above_21d_pct": 1.01,
+                    "distance_above_50d_pct": 2.04,
+                    "short_term_trend": "Up",
+                    "medium_term_trend": "Neutral",
+                    "long_term_trend": "Up",
+                    "extension": "Normal",
+                    "price_session": SESSION,
+                    "source_generated_at": "2026-08-14T21:00:00Z",
+                }
+                for symbol in ["SPY", "QQQ", "IWM"]
+            ],
+        },
+        "exposure_guidance": {"statement": "Exposure guidance excludes portfolio feedback. Exact exposure is indeterminate."},
+        "market_breadth": {"verified_symbols": 3, "price_history_provider": "FMP", "price_history_endpoint": "stable/historical-price-eod/full", "live_quote_substitution": False},
+        "cross_market_context": {
+            "status": "PARTIAL",
+            "lookback_window": {"start_date": "2026-08-12", "end_date": SESSION},
+            "cited_context": [{
+                "category": "general",
+                "title": "Treasury yields move after inflation data",
+                "publisher": "Example Wire",
+                "published_at": "2026-08-14T14:00:00Z",
+                "url": "https://example.com/rates",
+                "themes": ["central_banks_rates"],
+            }],
+            "economic_calendar": [{"date": f"{SESSION} 08:30:00", "country": "US", "event": "CPI", "actual": 2.7, "estimate": 2.8, "impact": "High"}],
+            "treasury_context": {"date": SESSION, "maturities_pct": {"year2": 4.0, "year10": 4.2, "year30": 4.7}},
+            "evidence_gaps": ["crypto: insufficient evidence"],
+        },
+        "portfolio_risk": {"account_value": 100_000, "normalized_long_position_count": 0},
+        "sell_rule_results": [],
+        "candidate_results": [],
+        "chart_verification": {"verified_tickers": [], "requested_tickers": []},
+        "input_sets": {"portfolio_tickers": []},
+    }
+
+    markdown = render_markdown(packet)
+    assert "Dashboard Gauge posture: Neutral" in markdown
+    assert "SPY: close" in markdown and "QQQ: close" in markdown and "IWM: close" in markdown
+    assert "Gauge component Short term: Neutral" in markdown
+    assert "O'Neil regime evidence: INSUFFICIENT_EVIDENCE" in markdown
+    assert "Exposure guidance excludes portfolio feedback" in markdown
+    assert "[Treasury yields move after inflation data](https://example.com/rates)" in markdown
+    assert "Interpretation only" in markdown
+
+    from pypdf import PdfReader
+
+    pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_pdf(packet))).pages)
+    assert "Dashboard Gauge posture: Neutral" in pdf_text
+    assert "Mixed indexes versus 21EMA" in pdf_text
+    assert "Cross-Market Context" in pdf_text
+    assert "O'Neil regime evidence: INSUFFICIENT_EVIDENCE" in pdf_text
+    assert "Treasury yields move after inflation data" in pdf_text

@@ -6,6 +6,18 @@ from typing import Any
 from .core import ValidationError
 
 
+UNVERIFIED_PIVOT_GATES = [
+    "prior_uptrend",
+    "conventional_base_type",
+    "base_stage",
+    "handle_quality_where_applicable",
+    "weekly_structure",
+    "volume_contraction",
+    "exact_pivot_price",
+    "breakout_volume_confirmation",
+]
+
+
 def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     metadata = snapshot.get("metadata") or {}
     if metadata.get("latest_completed_market_session") != session_date:
@@ -253,11 +265,24 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "accumulation_supply_score": accumulation,
                 "new_catalyst_score": catalyst,
                 "source_labels": [item.get("label") for item in sources],
+                "source_evidence": [
+                    {
+                        "source_type": item.get("source_type"),
+                        "label": item.get("label"),
+                        "pdf_page": item.get("pdf_page"),
+                        "rank": item.get("rank"),
+                    }
+                    for item in sources
+                ],
                 "company_name": (fmp.get("profile") or {}).get("company_name"),
                 "sector": (fmp.get("profile") or {}).get("sector"),
                 "current_price": current,
                 "candidate_resistance": base.get("candidate_resistance"),
                 "candidate_resistance_distance_pct": base.get("candidate_resistance_distance_pct"),
+                "base_candidate_status": base.get("status") or "INSUFFICIENT_EVIDENCE",
+                "base_length_weeks": base.get("base_length_weeks"),
+                "base_depth_pct": base.get("base_depth_pct"),
+                "pivot_missing_evidence": [] if base.get("pivot_status") == "VERIFIED" and pivot else list(UNVERIFIED_PIVOT_GATES),
                 "pct_from_52w_high": metrics.get("pct_from_52w_high"),
                 "relative_volume": metrics.get("relative_volume"),
                 "volume_evidence_status": volume.get("status") or "INSUFFICIENT_EVIDENCE",
@@ -295,6 +320,17 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "accumulation_supply_score": 0,
                 "new_catalyst_score": 0,
                 "source_labels": [item.get("label") for item in sources],
+                "source_evidence": [
+                    {
+                        "source_type": item.get("source_type"),
+                        "label": item.get("label"),
+                        "pdf_page": item.get("pdf_page"),
+                        "rank": item.get("rank"),
+                    }
+                    for item in sources
+                ],
+                "base_candidate_status": "INSUFFICIENT_EVIDENCE",
+                "pivot_missing_evidence": ["current_session_chart_history", *UNVERIFIED_PIVOT_GATES],
                 "chart_error": (chart_payload.get("errors") or {}).get(ticker),
             }
         )

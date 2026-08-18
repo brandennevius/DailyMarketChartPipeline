@@ -149,6 +149,18 @@ def build_review_packet(
             },
         ),
         "market_breadth": market_breadth or {"status": "insufficient_evidence", "verified_symbols": 0},
+        "cross_market_context": market_data.get(
+            "cross_market_context",
+            {
+                "schema_version": "fmp_cross_market_context_v1",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "evidence_gaps": ["No frozen cross-market source was supplied."],
+                "interpretation": {
+                    "decision_influence": "INTERPRETATION_ONLY",
+                    "may_override_deterministic_outputs": False,
+                },
+            },
+        ),
         "portfolio_risk": {
             "position_count": len(portfolio),
             "max_position_risk_pct": policy["portfolio"]["max_position_risk_pct"],

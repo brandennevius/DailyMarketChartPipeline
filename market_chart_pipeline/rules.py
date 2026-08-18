@@ -366,7 +366,10 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
         rationale = f"Missing critical candidate fields: {', '.join(critical)}"
     elif candidate.get("pivot_verification_status") != "verified":
         classification = "WATCH"
+        missing_pivot = candidate.get("pivot_missing_evidence") or []
         rationale = "Pivot is not verified, so no actionable entry is allowed."
+        if missing_pivot:
+            rationale += f" Missing pivot proof: {', '.join(missing_pivot)}."
     elif candidate.get("inside_buy_zone") is True and total >= 75:
         classification = "BUY_NOW"
         action = ACTION_ADD
@@ -390,7 +393,8 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
                 "company_name", "sector", "current_price", "candidate_resistance",
                 "candidate_resistance_distance_pct", "pct_from_52w_high", "relative_volume",
                 "average_dollar_volume", "volume_evidence_status", "quantitative_gate", "gate_reasons", "rs_trend",
-                "earnings_date", "source_labels",
+                "earnings_date", "source_labels", "source_evidence", "base_candidate_status",
+                "base_length_weeks", "base_depth_pct", "pivot_missing_evidence",
                 "daily_chart_asset",
             ]
         },

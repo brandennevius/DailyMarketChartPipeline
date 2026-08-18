@@ -68,6 +68,30 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             "explicit_failures": sorted(explicit_failures),
         })
 
+        cross_market = packet.get("cross_market_context") or {}
+        if cross_market.get("raw_inputs"):
+            source = sources.get("fmp_cross_market_context")
+            if not source:
+                raise ValidationError("Frozen cross-market context is missing its source record")
+            source_path = Path(str(source.get("path") or ""))
+            if source.get("status") != "verified" or not source_path.is_file():
+                raise ValidationError("Frozen cross-market context source is unavailable")
+            if sha256_file(source_path) != source.get("sha256"):
+                raise ValidationError("Frozen cross-market context source hash mismatch")
+            raw_hash = sha256_text(canonical_json(cross_market["raw_inputs"]))
+            if raw_hash != cross_market.get("raw_input_sha256"):
+                raise ValidationError("Frozen cross-market raw-input hash mismatch")
+            interpretation = cross_market.get("interpretation") or {}
+            if interpretation.get("decision_influence") != "INTERPRETATION_ONLY" or interpretation.get("may_override_deterministic_outputs") is not False:
+                raise ValidationError("Cross-market context is not constrained to interpretation-only use")
+            evidence.append({
+                "gate": "cross_market_frozen_context",
+                "status": "pass",
+                "source_sha256": source.get("sha256"),
+                "raw_input_sha256": raw_hash,
+                "context_status": cross_market.get("status"),
+            })
+
     allowed_origins = {"scanner", "watchlist", "open_position", None}
     bad_origins = [item for item in packet.get("candidate_results", []) if item.get("origin") not in allowed_origins]
     if bad_origins:

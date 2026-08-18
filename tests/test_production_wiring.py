@@ -7,6 +7,8 @@ import pandas as pd
 
 from market_chart_pipeline.adapters import derive_candidates_from_chart, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
+from market_chart_pipeline.cross_market import normalize_cross_market_context
+from market_chart_pipeline.market_gauge import normalize_dashboard_market_gauge
 from market_chart_pipeline.orchestrator import run_daily_review
 from market_chart_pipeline.utils import sha256_file
 
@@ -191,8 +193,66 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     portfolio.write_text(json.dumps(_snapshot()), encoding="utf-8")
     scan = tmp_path / "scan.pdf"
     scan.write_bytes(b"scan")
+    gauge_payload = {
+        "schema_version": "dashboard_market_gauge_v1",
+        "session_date": SESSION,
+        "generated_at": "2026-08-14T21:00:00Z",
+        "overall_state": "Neutral",
+        "overall_score": 50,
+        "components": [{"label": "Short term", "state": "Neutral", "detail": "Mixed indexes vs 21EMA"}],
+        "index_regimes": [
+            {
+                "symbol": symbol,
+                "date": SESSION,
+                "close": 100 + index,
+                "ema21": 99 + index,
+                "sma50": 98 + index,
+                "sma200": 90 + index,
+                "shortTerm": "Up",
+                "mediumTerm": "Neutral",
+                "longTerm": "Up",
+                "rawShortTerm": "Up",
+                "rawMediumTerm": "Up",
+                "rawLongTerm": "Up",
+                "above21Percent": 1.0,
+                "above50Percent": 2.0,
+                "extension": "Normal",
+            }
+            for index, symbol in enumerate(["SPY", "QQQ", "IWM"])
+        ],
+        "universe": {"indexes": ["SPY", "QQQ", "IWM"]},
+        "providers": ["Stooq", "Yahoo fallback"],
+    }
     gauge = tmp_path / "market-gauge.json"
-    gauge.write_text("{}", encoding="utf-8")
+    gauge.write_text(json.dumps(gauge_payload), encoding="utf-8")
+    cross_raw = {
+        "schema_version": "fmp_cross_market_raw_v1",
+        "provider": "FMP",
+        "session_date": SESSION,
+        "retrieved_at": "2026-08-14T21:05:00Z",
+        "lookback_window": {
+            "start_date": "2026-08-12",
+            "end_date": SESSION,
+            "lookback_calendar_days": 3,
+            "timezone": "America/New_York",
+            "rule": "Inclusive New York calendar dates ending on the completed session.",
+        },
+        "endpoint_results": {
+            "general": {"endpoint": "stable/news/general-latest", "params": {"page": 0, "limit": 100}, "status": "AVAILABLE", "error": None, "records": [{"title": "Treasury yields move", "site": "Example Wire", "publishedDate": "2026-08-14T14:00:00Z", "url": "https://example.com/rates"}]},
+            "stock": {"endpoint": "stable/news/stock-latest", "params": {"page": 0, "limit": 100}, "status": "INSUFFICIENT_EVIDENCE", "error": "No records", "records": []},
+            "forex": {"endpoint": "stable/news/forex-latest", "params": {"page": 0, "limit": 100}, "status": "INSUFFICIENT_EVIDENCE", "error": "No records", "records": []},
+            "crypto": {"endpoint": "stable/news/crypto-latest", "params": {"page": 0, "limit": 100}, "status": "INSUFFICIENT_EVIDENCE", "error": "No records", "records": []},
+            "economic_calendar": {"endpoint": "stable/economic-calendar", "params": {"from": SESSION, "to": SESSION}, "status": "AVAILABLE", "error": None, "records": [{"date": f"{SESSION} 08:30:00", "event": "CPI", "country": "US", "impact": "High", "actual": 2.7, "estimate": 2.8}]},
+            "treasury_rates": {"endpoint": "stable/treasury-rates", "params": {"from": SESSION, "to": SESSION}, "status": "AVAILABLE", "error": None, "records": [{"date": SESSION, "year2": 4.0, "year10": 4.2, "year30": 4.7}]},
+        },
+        "api_key_in_payload": False,
+    }
+    cross_source = tmp_path / "fmp-cross-market-context.json"
+    cross_source.write_text(json.dumps(cross_raw), encoding="utf-8")
+    market_data = normalize_dashboard_market_gauge(gauge_payload, SESSION)
+    market_data["cross_market_context"] = normalize_cross_market_context(cross_raw)
+    market_data_path = tmp_path / "market-data.json"
+    market_data_path.write_text(json.dumps(market_data), encoding="utf-8")
     archive = tmp_path / "chart.zip"
     archive.write_bytes(b"chart archive")
     sources = [
@@ -201,6 +261,7 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
             ("portfolio_snapshot", portfolio),
             ("marketsurge_scan", scan),
             ("market_gauge_json", gauge),
+            ("fmp_cross_market_context", cross_source),
             ("chart_packet_artifact", archive),
         ]
     ]
@@ -212,6 +273,7 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
         mode="read-only",
         output_dir=tmp_path / "reports",
         portfolio_path=str(portfolio),
+        market_data_path=str(market_data_path),
         chart_packet_dir=str(chart_dir),
         source_manifest_path=str(manifest),
         audit_profile="strict-core",
@@ -225,6 +287,10 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     text = "\n".join(page.extract_text() or "" for page in PdfReader(result["pdf_path"]).pages)
     assert all(ticker in text for ticker in tickers)
     assert "VERIFIED SELL-RULE SANDBOX - MSFT" in text
+    assert "Dashboard Gauge posture: Neutral" in text
+    assert "Cross-Market Context" in text
+    assert "Treasury yields move" in text
+    assert next(item for item in gates if item["gate"] == "cross_market_frozen_context")["context_status"] == "PARTIAL"
 
 
 def test_strict_core_run_rejects_tampered_source(tmp_path):

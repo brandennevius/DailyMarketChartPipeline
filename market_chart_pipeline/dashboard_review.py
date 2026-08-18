@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import requests
 
 from .core import ValidationError, build_packet
+from .cross_market import collect_fmp_cross_market_context
 from .manifest import EQUITY_TICKER_RE, FX_PAIR_RE, TICKER_RE, load_manifest
 from .marketsurge_ocr import EXCLUDED_TOKENS, SECTION_LABELS, extract_pdf_manifest
 from .market_gauge import normalize_dashboard_market_gauge
@@ -341,7 +342,6 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
         json.loads(gauge_path.read_text(encoding="utf-8")), client.session_date
     )
     market_data_path = work_dir / "market-data.json"
-    atomic_write_text(market_data_path, json.dumps(market_data, indent=2, sort_keys=True) + "\n")
 
     corrections = request.get("ocr_corrections")
     if corrections:
@@ -418,8 +418,14 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     chart_json = chart_dir / f"Market_Chart_Data_{client.session_date}.json"
     atomic_write_text(chart_json, json.dumps(chart_payload, indent=2, sort_keys=True) + "\n")
     chart_archive = Path(shutil.make_archive(str(work_dir / "chart-packet-artifact"), "zip", chart_dir))
+    cross_market_raw, cross_market_context = collect_fmp_cross_market_context(client.session_date)
+    cross_market_path = work_dir / "fmp-cross-market-context.json"
+    atomic_write_text(cross_market_path, json.dumps(cross_market_raw, indent=2, sort_keys=True) + "\n")
+    market_data["cross_market_context"] = cross_market_context
+    market_data.setdefault("source_timestamps", {})["fmp_cross_market_retrieved_at"] = cross_market_context.get("retrieved_at")
+    atomic_write_text(market_data_path, json.dumps(market_data, indent=2, sort_keys=True) + "\n")
     source_manifest = {
-        "schema_version": "daily_review_source_manifest_v2",
+        "schema_version": "daily_review_source_manifest_v3",
         "review_run_id": client.run_id,
         "session_date": client.session_date,
         "sources": [
@@ -427,6 +433,7 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
             {"label": "portfolio_snapshot_markdown", "path": str(snapshot_markdown_path), "sha256": sha256_file(snapshot_markdown_path), "status": "verified"},
             {"label": "marketsurge_scan", "path": str(pdf_path), "sha256": sha256_file(pdf_path), "status": "verified", "page_count": page_count},
             {"label": "market_gauge_json", "path": str(gauge_path), "sha256": sha256_file(gauge_path), "status": "verified"},
+            {"label": "fmp_cross_market_context", "path": str(cross_market_path), "sha256": sha256_file(cross_market_path), "status": "verified"},
             {"label": "chart_packet_artifact", "path": str(chart_archive), "sha256": sha256_file(chart_archive), "status": "verified"},
         ],
     }
