@@ -24,6 +24,40 @@ def test_hard_capital_protection_overrides_rapid_advance_hold():
     assert result["events"][0]["rule"] == "hard_capital_protection"
 
 
+def test_hpe_hard_stop_preserves_verified_sell_sandbox_evidence():
+    policy = load_policy()
+    sandbox = {
+        "status": "verified",
+        "file": "assets/HPE_sell_sandbox.png",
+        "sha256": "c19c0c3db45a66b811b6b1ff268dd8d2ea427541e2b38f7df109e2dc32004348",
+    }
+    result = evaluate_position(
+        {
+            "ticker": "HPE",
+            "entry_price": 54.79,
+            "entry_date": "2026-05-27",
+            "current_price": 52.89,
+            "stop_price": 48.97,
+            "atr": 2.89,
+            "highest_close_since_entry": 63.50,
+            "sell_sandbox_status": "verified",
+            "sell_sandbox_asset": sandbox,
+        },
+        policy,
+        "2026-08-20",
+    )
+
+    assert result["trade_state"] == "BROKEN"
+    assert result["action"] == "EXIT"
+    assert result["position_snapshot"]["sell_sandbox_status"] == "verified"
+    assert result["position_snapshot"]["sell_sandbox_asset"] == sandbox
+    hard_stop = result["events"][0]
+    assert hard_stop["rule"] == "hard_capital_protection"
+    assert hard_stop["status"] == "TRIGGERED"
+    assert hard_stop["values"]["current_price"] == 52.89
+    assert hard_stop["values"]["effective_stop"] == 54.79
+
+
 def test_rapid_advance_creates_eight_week_hold_when_stop_passes():
     policy = load_policy()
     result = evaluate_position(

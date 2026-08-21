@@ -10,6 +10,18 @@ ACTION_EXIT = "EXIT"
 ACTION_REPAIR = "REPAIR"
 ACTION_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
 
+_POSITION_SNAPSHOT_FIELDS = (
+    "company_name", "sector", "entry_price", "entry_date", "current_price", "shares",
+    "market_value", "position_weight_pct", "unrealized_pnl", "open_r_multiple",
+    "stop_price", "remaining_risk_to_stop_dollars", "take_profit", "setup", "grade",
+    "setup_criteria_score", "setup_criteria_max", "earnings_date", "sma21", "sma50",
+    "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
+    "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
+    "highest_close_since_entry", "trading_days_since_breakout", "trading_days_to_rapid_advance",
+    "atr", "atr_at_entry", "atr_current", "sell_sandbox_asset", "sell_sandbox_status",
+    "sell_sandbox_error",
+)
+
 
 def _event(rule: str, status: str, priority: int, rationale: str, **values: Any) -> dict[str, Any]:
     return {
@@ -23,6 +35,11 @@ def _event(rule: str, status: str, priority: int, rationale: str, **values: Any)
 
 def _missing(position: dict[str, Any], fields: list[str]) -> list[str]:
     return [field for field in fields if position.get(field) is None]
+
+
+def _position_snapshot(position: dict[str, Any]) -> dict[str, Any]:
+    """Preserve immutable position evidence on every deterministic outcome path."""
+    return {key: position.get(key) for key in _POSITION_SNAPSHOT_FIELDS}
 
 
 def _pct(current: float, base: float) -> float:
@@ -50,6 +67,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
             "trade_state": "UNKNOWN",
             "action": ACTION_INSUFFICIENT,
             "rationale": f"Missing critical position fields: {', '.join(critical_missing)}",
+            "position_snapshot": _position_snapshot(position),
             "events": [_event("critical_evidence", "INSUFFICIENT_EVIDENCE", 0, "Critical inputs are unavailable", missing=critical_missing)],
         }
 
@@ -116,6 +134,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
             "trade_state": "BROKEN",
             "action": ACTION_EXIT,
             "rationale": "Hard capital-protection stop was violated.",
+            "position_snapshot": _position_snapshot(position),
             "events": events,
         }
     events.append(
@@ -305,19 +324,7 @@ def evaluate_position(position: dict[str, Any], policy: dict[str, Any], session_
         "action": action,
         "rationale": rationale,
         "gain_pct": round(gain_pct, 2),
-        "position_snapshot": {
-            key: position.get(key)
-            for key in [
-                "company_name", "sector", "entry_price", "entry_date", "current_price", "shares",
-                "market_value", "position_weight_pct", "unrealized_pnl", "open_r_multiple",
-                "stop_price", "remaining_risk_to_stop_dollars", "take_profit", "setup", "grade",
-                "setup_criteria_score", "setup_criteria_max", "earnings_date", "sma21", "sma50",
-                "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
-                "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
-                "highest_close_since_entry", "trading_days_since_breakout", "trading_days_to_rapid_advance",
-                "atr", "atr_at_entry", "atr_current", "sell_sandbox_asset", "sell_sandbox_status", "sell_sandbox_error",
-            ]
-        },
+        "position_snapshot": _position_snapshot(position),
         "events": events,
     }
 

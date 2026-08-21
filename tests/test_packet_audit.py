@@ -5,8 +5,10 @@ import pytest
 from market_chart_pipeline.audit import audit_packet
 from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.orchestrator import run_daily_review
-from market_chart_pipeline.packet import build_review_packet
+from market_chart_pipeline.packet import build_review_packet, freeze_packet
 from market_chart_pipeline.policy import load_policy
+from market_chart_pipeline.rules import evaluate_position
+from market_chart_pipeline.utils import sha256_file
 
 
 def test_packet_freeze_hash_is_canonical_and_stable():
@@ -96,6 +98,64 @@ def test_audit_rejects_actionable_candidate_without_verified_chart():
 
     with pytest.raises(ValidationError, match="lack current verified charts"):
         audit_packet(packet)
+
+
+def test_strict_audit_accepts_hpe_hard_exit_with_verified_sandbox(tmp_path):
+    policy = load_policy()
+    result = evaluate_position(
+        {
+            "ticker": "HPE",
+            "entry_price": 54.79,
+            "entry_date": "2026-05-27",
+            "current_price": 52.89,
+            "stop_price": 48.97,
+            "atr": 2.89,
+            "highest_close_since_entry": 63.50,
+            "sell_sandbox_status": "verified",
+            "sell_sandbox_asset": {
+                "status": "verified",
+                "file": "assets/HPE_sell_sandbox.png",
+                "sha256": "c19c0c3db45a66b811b6b1ff268dd8d2ea427541e2b38f7df109e2dc32004348",
+            },
+        },
+        policy,
+        "2026-08-20",
+    )
+    required_sources = {
+        "portfolio_snapshot",
+        "marketsurge_scan",
+        "market_gauge_json",
+        "chart_packet_artifact",
+        "chart_packet_json",
+        "chart_packet_pdf",
+    }
+    sources = []
+    for label in sorted(required_sources):
+        path = tmp_path / label
+        path.write_text(label, encoding="utf-8")
+        sources.append({"label": label, "path": str(path), "sha256": sha256_file(path), "status": "verified"})
+    packet = freeze_packet(
+        {
+            "audit_profile": "strict-core",
+            "sources": sources,
+            "chart_verification": {"status": "verified", "requested_tickers": [], "verified_tickers": []},
+            "portfolio_risk": {"status": "calculated"},
+            "sell_rule_results": [result],
+            "candidate_results": [],
+            "shakeout_results": [],
+            "input_sets": {
+                "portfolio_tickers": ["HPE"],
+                "candidate_tickers": [],
+                "watchlist_tickers": [],
+            },
+        }
+    )
+
+    evidence = audit_packet(packet)
+
+    sandbox_gate = next(item for item in evidence if item["gate"] == "sell_sandbox_charts")
+    assert sandbox_gate["verified"] == ["HPE"]
+    assert result["action"] == "EXIT"
 
 
 def test_orchestrator_writes_packet_markdown_and_pdf_from_packet_only(tmp_path):
