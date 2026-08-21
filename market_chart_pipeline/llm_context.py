@@ -12,11 +12,11 @@ import requests
 from .utils import canonical_json, sha256_text
 
 
-DEFAULT_MODEL = "gpt-5.4-nano"
+DEFAULT_MODEL = "gpt-5-mini"
 INPUT_SCHEMA_VERSION = "cross_market_llm_input_v1"
-SYNTHESIS_SCHEMA_VERSION = "cross_market_llm_synthesis_v1"
-OUTPUT_SCHEMA_VERSION = "cross_market_llm_output_v1"
-PROMPT_VERSION = "cross_market_synthesis_prompt_v1"
+SYNTHESIS_SCHEMA_VERSION = "cross_market_llm_synthesis_v2"
+OUTPUT_SCHEMA_VERSION = "cross_market_llm_output_v2"
+PROMPT_VERSION = "cross_market_synthesis_prompt_v2"
 MAX_INPUT_BYTES = 400_000
 MAX_OUTPUT_TOKENS = 900
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -43,13 +43,12 @@ OUTPUT_JSON_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": ["text", "citation_ids"],
                 "properties": {
-                    "text": {"type": "string", "minLength": 1, "maxLength": 1200},
+                    "text": {"type": "string"},
                     "citation_ids": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 8,
-                        "uniqueItems": True,
-                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "items": {"type": "string"},
                     },
                 },
             },
@@ -62,13 +61,12 @@ OUTPUT_JSON_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": ["theme", "citation_ids"],
                 "properties": {
-                    "theme": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "theme": {"type": "string"},
                     "citation_ids": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 6,
-                        "uniqueItems": True,
-                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "items": {"type": "string"},
                     },
                 },
             },
@@ -81,13 +79,12 @@ OUTPUT_JSON_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "required": ["note", "citation_ids"],
                 "properties": {
-                    "note": {"type": "string", "minLength": 1, "maxLength": 320},
+                    "note": {"type": "string"},
                     "citation_ids": {
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 6,
-                        "uniqueItems": True,
-                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "items": {"type": "string"},
                     },
                 },
             },
@@ -107,12 +104,37 @@ class SynthesisValidationError(ValueError):
     pass
 
 
+class OpenAIResponseError(RuntimeError):
+    def __init__(self, *, status_code: int, error: dict[str, Any], request_id: str | None) -> None:
+        self.status_code = status_code
+        self.error = error
+        self.request_id = request_id
+        message = str(error.get("message") or f"OpenAI returned HTTP {status_code}")
+        super().__init__(message)
+
+    def safe_details(self) -> dict[str, Any]:
+        return {
+            "status_code": self.status_code,
+            "code": _safe_optional_text(self.error.get("code"), 120),
+            "type": _safe_optional_text(self.error.get("type"), 120),
+            "param": _safe_optional_text(self.error.get("param"), 120),
+            "message": _safe_optional_text(self.error.get("message"), 300),
+            "request_id": _safe_optional_text(self.request_id, 120),
+        }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_error(error: Exception) -> str:
     return (str(error).replace("\n", " ").strip() or type(error).__name__)[:300]
+
+
+def _safe_optional_text(value: Any, maximum: int) -> str | None:
+    if value is None:
+        return None
+    return str(value).replace("\r", " ").replace("\n", " ").strip()[:maximum] or None
 
 
 def _evidence_record(evidence_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -238,9 +260,6 @@ def build_request_contract(input_contract: dict[str, Any], model: str) -> dict[s
         "model": model,
         "store": False,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
-        "reasoning": {"effort": "none"},
-        "tools": [],
-        "tool_choice": "none",
         "instructions": SYSTEM_INSTRUCTIONS,
         "input": [
             {
@@ -258,7 +277,7 @@ def build_request_contract(input_contract: dict[str, Any], model: str) -> dict[s
         },
     }
     return {
-        "schema_version": "openai_responses_request_v1",
+        "schema_version": "openai_responses_request_v2",
         "provider": "OpenAI",
         "endpoint": "v1/responses",
         "model": model,
@@ -376,8 +395,17 @@ def _default_request(api_key: str, api_request: dict[str, Any]) -> dict[str, Any
         json=api_request,
         timeout=60,
     )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if not response.ok:
+        error = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
+        raise OpenAIResponseError(
+            status_code=response.status_code,
+            error=error,
+            request_id=response.headers.get("x-request-id") or response.headers.get("request-id"),
+        )
     if not isinstance(payload, dict):
         raise SynthesisValidationError("OpenAI response payload is not an object")
     return payload
@@ -391,6 +419,7 @@ def _fallback(
     generated_at: str,
     reason_code: str,
     reason: str,
+    api_error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = {
         "session_date": session_date,
@@ -414,6 +443,7 @@ def _fallback(
         "output_sha256": sha256_text(canonical_json(output)),
         "reason_code": reason_code,
         "reason": reason,
+        "api_error": api_error,
         "usage": None,
         "interpretation": {
             "decision_influence": "INTERPRETATION_ONLY",
@@ -476,8 +506,8 @@ def validate_frozen_synthesis(
         if output != expected_output:
             raise SynthesisValidationError("Frozen synthesis fallback is malformed")
     api_request = request_contract.get("api_request") or {}
-    if api_request.get("store") is not False or api_request.get("tools") != [] or api_request.get("tool_choice") != "none":
-        raise SynthesisValidationError("Frozen synthesis request enabled storage or tools")
+    if api_request.get("store") is not False or "tools" in api_request or "tool_choice" in api_request:
+        raise SynthesisValidationError("Frozen synthesis request enabled or declared tools")
     return synthesis
 
 
@@ -555,11 +585,13 @@ def synthesize_cross_market_context(
         validate_frozen_synthesis(synthesis, cross_market_context, market_regime)
         return synthesis
     except Exception as exc:
+        api_error = exc.safe_details() if isinstance(exc, OpenAIResponseError) else None
         return _fallback(
             session_date=session_date,
             model=selected_model,
             request_contract=request_contract,
             generated_at=timestamp,
-            reason_code="LLM_SYNTHESIS_VALIDATION_FAILED",
+            reason_code="OPENAI_API_ERROR" if api_error else "LLM_SYNTHESIS_VALIDATION_FAILED",
             reason=_safe_error(exc),
+            api_error=api_error,
         )

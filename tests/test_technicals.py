@@ -39,7 +39,6 @@ def test_base_fields_are_conservative():
     rs = pd.Series(range(100, 100 + len(df)), index=df.index, dtype=float)
     result = calculate_technical_context(df, rs)
     base = result["base_analysis"]
-    assert base["status"] in {"CANDIDATE_ONLY", "NO_CONSERVATIVE_BASE_CANDIDATE"}
-    if base["status"] == "CANDIDATE_ONLY":
-        assert base["pivot_price"] is None
-        assert base["stage_number"] is None
+    assert base["status"] != "VERIFIED_ALGORITHMIC_PIVOT"
+    assert base["pivot_price"] is None
+    assert base["algorithm_version"] == "oneil_style_ohlcv_patterns_v1"

@@ -21,6 +21,21 @@ from .rules import (
 from .utils import canonical_json, sha256_file, sha256_text
 
 
+def _iso_dates(value: Any) -> list[str]:
+    dates: list[str] = []
+    if isinstance(value, dict):
+        for child in value.values():
+            dates.extend(_iso_dates(child))
+    elif isinstance(value, list):
+        for child in value:
+            dates.extend(_iso_dates(child))
+    elif isinstance(value, str) and len(value) >= 10:
+        candidate = value[:10]
+        if candidate[4:5] == "-" and candidate[7:8] == "-" and candidate.replace("-", "").isdigit():
+            dates.append(candidate)
+    return dates
+
+
 def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     expected_hash = packet.get("packet_sha256")
@@ -183,12 +198,20 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "pivot_structure_verification_status": snapshot.get("pivot_structure_verification_status"),
                 "exact_pivot_price": snapshot.get("exact_pivot_price"),
                 "breakout_volume_confirmation": snapshot.get("breakout_volume_confirmation"),
+                "breakout_volume_ratio_50d": snapshot.get("breakout_volume_ratio_50d"),
+                "pattern_algorithm_version": snapshot.get("pattern_algorithm_version"),
+                "pattern_policy_version": snapshot.get("pattern_policy_version"),
             }
             if (
                 required["pivot_verification_status"] != "verified"
                 or required["pivot_structure_verification_status"] != "VERIFIED"
                 or required["exact_pivot_price"] is None
                 or required["breakout_volume_confirmation"] is not True
+                or required["breakout_volume_ratio_50d"] is None
+                or required["pattern_algorithm_version"] != "oneil_style_ohlcv_patterns_v1"
+                or required["pattern_policy_version"] != "oneil_style_pattern_policy_v1"
+                or snapshot.get("breakout_status") != "CONFIRMED"
+                or any(status != "PASS" for status in (snapshot.get("pivot_gate_statuses") or {}).values())
             ):
                 raise ValidationError(f"BUY NOW candidate lacks a fully verified pivot/breakout: {item.get('ticker')}")
         if item.get("action") == CANDIDATE_ACTION_EARLY:
@@ -269,6 +292,25 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValidationError(f"Top CANSLIM setup lacks decision-useful evidence: {item.get('ticker')}")
         if not (item.get("snapshot") or {}).get("source_evidence"):
             raise ValidationError(f"Top CANSLIM setup lacks MarketSurge provenance: {item.get('ticker')}")
+        snapshot = item.get("snapshot") or {}
+        if snapshot.get("pattern_algorithm_version") != "oneil_style_ohlcv_patterns_v1":
+            raise ValidationError(f"Top CANSLIM setup lacks versioned pattern evidence: {item.get('ticker')}")
+        if snapshot.get("pattern_policy_version") != "oneil_style_pattern_policy_v1":
+            raise ValidationError(f"Top CANSLIM setup lacks versioned pattern policy: {item.get('ticker')}")
+        dated_evidence = _iso_dates(
+            {
+                "base_start": snapshot.get("base_start"),
+                "base_end": snapshot.get("base_end"),
+                "breakout_date": snapshot.get("breakout_date"),
+                "left_side_high": snapshot.get("left_side_high"),
+                "base_low": snapshot.get("base_low"),
+                "handle": snapshot.get("handle"),
+                "pattern_gates": snapshot.get("pattern_gates"),
+                "pattern_evidence_bars": snapshot.get("pattern_evidence_bars"),
+            }
+        )
+        if any(value and str(value) > str(packet.get("session_date")) for value in dated_evidence):
+            raise ValidationError(f"Top CANSLIM setup contains look-ahead evidence: {item.get('ticker')}")
     if universe:
         if universe.get("ranked_top10_tickers") != ranked_tickers:
             raise ValidationError("Candidate-universe audit does not match Top CANSLIM setup ranking")

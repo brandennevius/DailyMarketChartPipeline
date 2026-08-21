@@ -1,6 +1,6 @@
 {
-  "policy_version": "2026.08.20.1",
-  "calculation_version": "daily-review-v4-top10-canslim",
+  "policy_version": "2026.08.21.1",
+  "calculation_version": "daily-review-v5-algorithmic-pivots",
   "actions": ["HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"],
   "candidate_actions": ["BUY NOW", "EARLY ENTRY", "WATCH NEAR PIVOT", "WATCH / BUILDING", "WAIT FOR CONFIRMATION", "AVOID", "INSUFFICIENT EVIDENCE", "EXCLUDED - OPEN POSITION", "EXCLUDED - NON-EQUITY"],
   "hard_rules": {
@@ -64,6 +64,34 @@
     "minimum_days_to_earnings_for_action": 5,
     "buying_permissive_internal_regimes": ["Confirmed uptrend"],
     "buying_permissive_dashboard_postures": ["Grow"]
+  },
+  "pattern_engine": {
+    "algorithm_version": "oneil_style_ohlcv_patterns_v1",
+    "policy_version": "oneil_style_pattern_policy_v1",
+    "normal_depth_min_pct": 8.0,
+    "normal_depth_max_pct": 35.0,
+    "deep_depth_max_pct": 50.0,
+    "allow_deep_bases": false,
+    "cup_min_weeks": 7,
+    "cup_max_weeks": 35,
+    "cup_min_depth_pct": 12.0,
+    "handle_min_weeks": 1,
+    "handle_max_weeks": 5,
+    "handle_max_depth_pct": 15.0,
+    "flat_base_min_weeks": 5,
+    "flat_base_max_weeks": 8,
+    "flat_base_max_depth_pct": 15.0,
+    "flat_base_max_net_change_pct": 5.0,
+    "flat_base_min_down_weeks": 1,
+    "double_bottom_min_weeks": 7,
+    "double_bottom_max_weeks": 30,
+    "prior_uptrend_min_pct": 25.0,
+    "right_side_recovery_min_ratio": 0.90,
+    "volume_contraction_max_ratio": 0.90,
+    "breakout_relative_volume_min": 1.50,
+    "buy_zone_pct": 5.0,
+    "pivot_increment": 0.10,
+    "scan_recent_weeks": 10
   },
   "exposure_bands": {
     "Defensive": "0%-20%",

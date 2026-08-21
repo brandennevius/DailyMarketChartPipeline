@@ -16,30 +16,36 @@ UNVERIFIED_PIVOT_GATES = [
     "weekly_structure",
     "volume_contraction",
     "exact_pivot_price",
-    "breakout_volume_confirmation",
+    "prebreakout_containment",
 ]
 
 
 def _pivot_verification(base: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
+    gates = base.get("gates") or {}
     structural_statuses = {
-        "prior_uptrend": base.get("prior_uptrend_status"),
-        "conventional_base_type": base.get("base_type_status"),
-        "base_duration": base.get("base_duration_status"),
-        "base_depth": base.get("base_depth_status"),
-        "base_stage": base.get("stage_status"),
-        "handle_quality_where_applicable": base.get("handle_quality_status"),
-        "weekly_structure": base.get("weekly_structure_status"),
-        "volume_contraction": base.get("volume_contraction_status"),
+        name: (gates.get(name) or {}).get("status")
+        for name in UNVERIFIED_PIVOT_GATES
+        if name != "exact_pivot_price"
     }
+    structural_statuses.update(
+        {
+            name: (gate or {}).get("status")
+            for name, gate in gates.items()
+            if name != "exact_pivot_price" and name not in structural_statuses
+        }
+    )
+    handle_names = [name for name in gates if name.startswith("handle_")]
+    structural_statuses["handle_quality_where_applicable"] = (
+        "PASS" if not handle_names or all((gates.get(name) or {}).get("status") == "PASS" for name in handle_names)
+        else "FAIL"
+    )
     missing = [
         name
         for name, status in structural_statuses.items()
-        if status not in {"VERIFIED", "NOT_APPLICABLE"}
+        if status != "PASS"
     ]
-    if base.get("pivot_price") is None or base.get("pivot_status") != "VERIFIED":
+    if base.get("pivot_price") is None or base.get("pivot_status") != "VERIFIED_ALGORITHMIC_PIVOT":
         missing.append("exact_pivot_price")
-    if base.get("breakout_volume_confirmation") is not True:
-        missing.append("breakout_volume_confirmation")
     status = "verified" if not missing else "unverified"
     return status, sorted(set(missing)), structural_statuses
 
@@ -291,11 +297,14 @@ def _candidate_component_scores(
         technical += 15.0
     if None not in (sma21, sma50, sma200) and float(sma21) > float(sma50) > float(sma200):
         technical += 15.0
-    if base.get("status") == "CANDIDATE_ONLY":
+    if base.get("status") == "VERIFIED_ALGORITHMIC_PIVOT":
+        technical += 35.0
+    elif base.get("status") == "BUILDING":
         technical += 20.0
+    if base.get("status") in {"VERIFIED_ALGORITHMIC_PIVOT", "BUILDING"}:
         weeks = base.get("base_length_weeks")
         depth = base.get("base_depth_pct")
-        if weeks is not None and depth is not None and 6 <= float(weeks) <= 15 and 3 <= float(depth) <= 35:
+        if weeks is not None and depth is not None and 5 <= float(weeks) <= 35 and 3 <= float(depth) <= 35:
             technical += 10.0
         distance = base.get("candidate_resistance_distance_pct")
         if distance is not None and -8 <= float(distance) <= 2:
@@ -318,6 +327,8 @@ def _candidate_component_scores(
     new = 0.0
     if relative.get("new_high_52w") is True:
         new += 40.0
+    if base.get("status") == "VERIFIED_ALGORITHMIC_PIVOT":
+        new += 35.0
     resistance_distance = base.get("candidate_resistance_distance_pct")
     if resistance_distance is not None and -8 <= float(resistance_distance) <= 2:
         new += 40.0
@@ -394,9 +405,7 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
         sources = (manifest_records.get(ticker) or {}).get("sources") or record.get("sources") or []
         source_types = {str(item.get("source_type")) for item in sources if item.get("source_type")}
         origin = "open_position" if "PORTFOLIO" in source_types else "watchlist" if "BRANDENS_WATCHLIST" in source_types else "scanner"
-        pivot = base.get("pivot_price")
         current = metrics.get("current_price")
-        distance = ((float(current) - float(pivot)) / float(pivot) * 100.0) if pivot and current else None
         earnings = fmp.get("earnings") or {}
         components, missing_evidence, available_dimensions = _candidate_component_scores(
             metrics, quarterly, annual, relative, volume, base, earnings
@@ -418,12 +427,17 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                     name for name in pivot_missing if name not in {"exact_pivot_price", "breakout_volume_confirmation"}
                 ] else "UNVERIFIED",
                 "pivot_gate_statuses": pivot_gate_statuses,
-                "exact_pivot_price": pivot,
+                "exact_pivot_price": base.get("pivot_price"),
+                "pivot_basis": base.get("pivot_basis"),
+                "buy_zone_upper_bound": base.get("buy_zone_upper_bound"),
                 "early_entry_verification_status": base.get("early_entry_verification_status") or "unverified",
                 "early_entry_price": base.get("early_entry_price"),
                 "breakout_volume_confirmation": base.get("breakout_volume_confirmation"),
-                "inside_buy_zone": distance is not None and 0 <= distance <= 5,
-                "extended": distance is not None and distance > 5,
+                "breakout_status": base.get("breakout_status"),
+                "breakout_date": base.get("breakout_date"),
+                "breakout_volume_ratio_50d": base.get("breakout_volume_ratio_50d"),
+                "inside_buy_zone": bool(base.get("inside_buy_zone")),
+                "extended": bool(base.get("extended")),
                 "fundamental_quality_score": components["fundamental_quality"],
                 "relative_strength_group_score": components["relative_strength_group"],
                 "technical_setup_score": components["technical_setup"],
@@ -461,6 +475,20 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "base_candidate_status": base.get("status") or "INSUFFICIENT_EVIDENCE",
                 "base_length_weeks": base.get("base_length_weeks"),
                 "base_depth_pct": base.get("base_depth_pct"),
+                "pattern_type": base.get("pattern_type") or "UNKNOWN",
+                "pattern_confidence": base.get("confidence") or "LOW",
+                "pattern_confidence_score": base.get("confidence_score"),
+                "pattern_algorithm_version": base.get("algorithm_version"),
+                "pattern_policy_version": base.get("policy_version"),
+                "base_start": base.get("base_start"),
+                "base_end": base.get("base_end"),
+                "left_side_high": base.get("left_side_high"),
+                "base_low": base.get("base_low"),
+                "handle": base.get("handle"),
+                "pattern_gates": base.get("gates") or {},
+                "pattern_evidence_bars": base.get("evidence_bars") or {},
+                "invalidation_support": base.get("invalidation_support"),
+                "pattern_reason": base.get("reason"),
                 "pivot_missing_evidence": pivot_missing,
                 "pct_from_52w_high": metrics.get("pct_from_52w_high"),
                 "relative_volume": metrics.get("relative_volume"),
@@ -476,11 +504,7 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "earnings_date": earnings.get("earnings_date"),
                 "days_to_earnings": earnings.get("days_to_earnings"),
                 "earnings_status": earnings.get("earnings_status"),
-                "setup_pattern_state": (
-                    "TECHNICAL BASE CANDIDATE"
-                    if base.get("status") == "CANDIDATE_ONLY"
-                    else str(base.get("status") or "INSUFFICIENT EVIDENCE").replace("_", " ")
-                ),
+                "setup_pattern_state": f"{base.get('pattern_type') or 'UNKNOWN'} | {str(base.get('status') or 'INSUFFICIENT_EVIDENCE').replace('_', ' ')}",
             }
         chart_path = chart_dir / "charts" / f"{metrics.get('ticker')}_daily.png" if chart_dir else None
         if chart_path and chart_path.exists():
@@ -489,6 +513,14 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
             candidate["daily_chart_asset"] = {
                 "file": f"charts/{metrics.get('ticker')}_daily.png",
                 "sha256": sha256_file(chart_path),
+            }
+        pattern_chart_path = chart_dir / "charts" / f"{metrics.get('ticker')}_pattern.png" if chart_dir else None
+        if pattern_chart_path and pattern_chart_path.exists():
+            from .utils import sha256_file
+
+            candidate["pattern_chart_asset"] = {
+                "file": f"charts/{metrics.get('ticker')}_pattern.png",
+                "sha256": sha256_file(pattern_chart_path),
             }
         candidates.append(candidate)
         seen.add(ticker)
@@ -514,6 +546,9 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "early_entry_verification_status": "unverified",
                 "early_entry_price": None,
                 "breakout_volume_confirmation": None,
+                "breakout_status": "INSUFFICIENT_EVIDENCE",
+                "breakout_date": None,
+                "breakout_volume_ratio_50d": None,
                 "inside_buy_zone": False,
                 "extended": False,
                 "fundamental_quality_score": 0,
@@ -542,6 +577,7 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 ],
                 "base_candidate_status": "INSUFFICIENT_EVIDENCE",
                 "setup_pattern_state": "INSUFFICIENT EVIDENCE",
+                "pattern_chart_asset": None,
                 "pivot_missing_evidence": ["current_session_chart_history", *UNVERIFIED_PIVOT_GATES],
                 "chart_error": (chart_payload.get("errors") or {}).get(ticker),
             }

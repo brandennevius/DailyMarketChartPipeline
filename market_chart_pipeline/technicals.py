@@ -4,6 +4,8 @@ from typing import Any
 
 import pandas as pd
 
+from .patterns import analyze_ohlcv_patterns
+
 
 def _pct_distance(value: float, reference: float) -> float | None:
     if reference is None or reference == 0:
@@ -86,55 +88,11 @@ def _volume_metrics(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _base_candidate(df: pd.DataFrame) -> dict[str, Any]:
-    """Conservative base candidate, not an O'Neil pattern declaration.
-
-    Finds a recent 6- to 15-week consolidation whose high is near the current
-    price. It deliberately leaves stage and pivot unverified when the structure
-    cannot be supported from price history alone.
-    """
-    weekly = df.resample("W-FRI").agg({
-        "Open": "first", "High": "max", "Low": "min", "Close": "last"
-    }).dropna()
-    if len(weekly) < 20:
-        return {"status": "INSUFFICIENT_EVIDENCE"}
-
-    best = None
-    for weeks in range(6, 16):
-        window = weekly.tail(weeks)
-        high = float(window["High"].max())
-        low = float(window["Low"].min())
-        latest = float(window["Close"].iloc[-1])
-        depth = (high - low) / high * 100 if high > 0 else None
-        near_high = latest >= high * 0.88
-        if depth is not None and 3 <= depth <= 35 and near_high:
-            candidate = {
-                "status": "CANDIDATE_ONLY",
-                "base_length_weeks": weeks,
-                "base_depth_pct": float(depth),
-                "candidate_resistance": high,
-                "candidate_resistance_distance_pct": _pct_distance(latest, high),
-                "pivot_price": None,
-                "pivot_status": "VISUAL_CONFIRMATION_REQUIRED",
-                "stage_number": None,
-                "stage_status": "UNVERIFIED",
-            }
-            if best is None or candidate["base_depth_pct"] < best["base_depth_pct"]:
-                best = candidate
-    return best or {
-        "status": "NO_CONSERVATIVE_BASE_CANDIDATE",
-        "base_length_weeks": None,
-        "base_depth_pct": None,
-        "candidate_resistance": None,
-        "candidate_resistance_distance_pct": None,
-        "pivot_price": None,
-        "pivot_status": "UNVERIFIED",
-        "stage_number": None,
-        "stage_status": "UNVERIFIED",
-    }
-
-
-def calculate_technical_context(df: pd.DataFrame, rs: pd.Series) -> dict[str, Any]:
+def calculate_technical_context(
+    df: pd.DataFrame,
+    rs: pd.Series,
+    pattern_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     close = df["Close"]
     price = float(close.iloc[-1])
     sma21 = close.rolling(21).mean()
@@ -161,5 +119,5 @@ def calculate_technical_context(df: pd.DataFrame, rs: pd.Series) -> dict[str, An
         "ma_40w_trend": _trend_label(slope40, rising=0.5, falling=-0.5),
         "relative_strength": _rs_metrics(rs),
         "volume": _volume_metrics(df),
-        "base_analysis": _base_candidate(df),
+        "base_analysis": analyze_ohlcv_patterns(df, policy=pattern_policy),
     }

@@ -15,6 +15,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .candidate_charts import render_pattern_chart
+from .patterns import PATTERN_ALGORITHM_VERSION
 from .fmp import enrich_symbol, historical_eod, history_concurrency, price_history_metadata
 from .technicals import calculate_technical_context
 
@@ -244,6 +246,8 @@ def serialize_price_history(df: pd.DataFrame, limit: int = 500) -> list[dict]:
 
 def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, provenance: dict | None=None) -> dict:
     symbols=normalize_symbols(symbols); output_dir.mkdir(parents=True,exist_ok=True); charts=output_dir/"charts"
+    policy_payload = json.loads((Path(__file__).resolve().parents[1] / "config" / "trading_policy.json").read_text(encoding="utf-8"))
+    pattern_policy = policy_payload.get("pattern_engine") or {}
     bars, fetch_errors=fetch_bars(symbols,session_date); records=[]; errors=dict(fetch_errors); enrichment_errors={}
     start=(pd.Timestamp(session_date)-pd.Timedelta(days=1100)).date().isoformat()
     try:
@@ -269,13 +273,14 @@ def build_packet(symbols: Iterable[str], session_date: str, output_dir: Path, pr
             except Exception as exc:
                 enrichment_errors[symbol]=str(exc)
                 fmp_data={"provider":"FMP","status":"ERROR","error":str(exc),"historical_price_evidence":price_history_metadata(bars[symbol])}
-            technical_context=calculate_technical_context(bars[symbol],rs)
-            daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"
+            technical_context=calculate_technical_context(bars[symbol],rs,pattern_policy)
+            daily=charts/f"{symbol}_daily.png"; weekly=charts/f"{symbol}_weekly.png"; pattern_chart=charts/f"{symbol}_pattern.png"
             render_chart(symbol,bars[symbol],session_date,daily,False,rs); render_chart(symbol,bars[symbol],session_date,weekly,True,rs)
-            records.append({"metrics":asdict(m),"technical_context":technical_context,"fmp":fmp_data,"price_data":price_history_metadata(bars[symbol]),"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"latest_bar_date":bars[symbol].index[-1].date().isoformat(),"price_history":serialize_price_history(bars[symbol])})
+            render_pattern_chart(symbol,bars[symbol],session_date,technical_context["base_analysis"],pattern_chart)
+            records.append({"metrics":asdict(m),"technical_context":technical_context,"fmp":fmp_data,"price_data":price_history_metadata(bars[symbol]),"sources":(provenance or {}).get(symbol,[]),"daily_chart":str(daily),"weekly_chart":str(weekly),"pattern_chart":str(pattern_chart),"latest_bar_date":bars[symbol].index[-1].date().isoformat(),"price_history":serialize_price_history(bars[symbol])})
         except Exception as exc: errors[symbol]=str(exc)
     status="COMPLETE" if not errors and not enrichment_errors else "COMPLETE_WITH_WARNINGS"
-    payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"enrichment_errors":enrichment_errors,"records":records,"status":status,"chart_data_source":"FMP","chart_data_endpoint":"stable/historical-price-eod/full","chart_data_policy":{"bounded_history":True,"exact_session_required":True,"live_quote_substitution":False,"controlled_concurrency":history_concurrency()},"enrichment_source":"FMP","benchmark":"^GSPC"}
+    payload={"session_date":session_date,"requested_tickers":symbols,"verified_count":len(records),"error_count":len(errors),"errors":errors,"enrichment_errors":enrichment_errors,"records":records,"status":status,"chart_data_source":"FMP","chart_data_endpoint":"stable/historical-price-eod/full","chart_data_policy":{"bounded_history":True,"exact_session_required":True,"live_quote_substitution":False,"controlled_concurrency":history_concurrency()},"pattern_algorithm_version":PATTERN_ALGORITHM_VERSION,"pattern_policy_version":pattern_policy.get("policy_version"),"enrichment_source":"FMP","benchmark":"^GSPC"}
     json_path=output_dir/f"Market_Chart_Data_{session_date}.json"; json_path.write_text(json.dumps(payload,indent=2),encoding="utf-8")
     pdf_path=output_dir/f"Market_Chart_Packet_{session_date}.pdf"; build_pdf(session_date,records,pdf_path)
     payload["artifacts"]={"json":str(json_path),"pdf":str(pdf_path),"pdf_sha256":sha256(pdf_path)}

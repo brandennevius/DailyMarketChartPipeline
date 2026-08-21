@@ -80,6 +80,7 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
         if record.get("latest_bar_date") == session_date
         and record.get("daily_chart")
         and record.get("weekly_chart")
+        and record.get("pattern_chart")
     }
     if payload.get("session_date") != session_date:
         result["errors"].append("Chart packet session date does not match review session")
@@ -87,6 +88,10 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
         result["errors"].append("Chart packet historical price provider is not FMP")
     if (payload.get("chart_data_policy") or {}).get("live_quote_substitution") is not False:
         result["errors"].append("Chart packet does not explicitly prohibit live quote substitution")
+    if payload.get("pattern_algorithm_version") != "oneil_style_ohlcv_patterns_v1":
+        result["errors"].append("Chart packet pattern algorithm version is missing or unsupported")
+    if payload.get("pattern_policy_version") != "oneil_style_pattern_policy_v1":
+        result["errors"].append("Chart packet pattern policy version is missing or unsupported")
     if int(payload.get("verified_count", -1)) + int(payload.get("error_count", -1)) != len(requested):
         result["errors"].append("Chart packet requested/verified/error counts do not reconcile")
     expected_pdf_hash = payload.get("artifacts", {}).get("pdf_sha256")
@@ -106,6 +111,8 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
             "price_history_provider": payload.get("chart_data_source"),
             "price_history_endpoint": payload.get("chart_data_endpoint"),
             "live_quote_substitution": (payload.get("chart_data_policy") or {}).get("live_quote_substitution"),
+            "pattern_algorithm_version": payload.get("pattern_algorithm_version"),
+            "pattern_policy_version": payload.get("pattern_policy_version"),
         }
     )
     return result

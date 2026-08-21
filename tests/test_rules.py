@@ -226,7 +226,12 @@ def _rankable_candidate(ticker: str, *, score: float = 80, technical: float | No
         "asset_class": "EQUITY",
         "chart_evidence_status": "VERIFIED",
         "pivot_verification_status": "unverified",
-        "base_candidate_status": "CANDIDATE_ONLY",
+        "pivot_structure_verification_status": "UNVERIFIED",
+        "base_candidate_status": "BUILDING",
+        "pattern_algorithm_version": "oneil_style_ohlcv_patterns_v1",
+        "pattern_policy_version": "oneil_style_pattern_policy_v1",
+        "pattern_type": "UNKNOWN",
+        "pivot_gate_statuses": {"prior_uptrend": "UNKNOWN"},
         "candidate_resistance": 100,
         "candidate_resistance_distance_pct": -2,
         "current_price": 98,
@@ -284,9 +289,19 @@ def test_buy_now_requires_every_verified_entry_and_market_gate():
         {
             "pivot_verification_status": "verified",
             "pivot_structure_verification_status": "VERIFIED",
+            "pattern_algorithm_version": "oneil_style_ohlcv_patterns_v1",
+            "pivot_gate_statuses": {
+                "prior_uptrend": "PASS",
+                "base_duration": "PASS",
+                "base_depth": "PASS",
+                "weekly_structure": "PASS",
+                "volume_contraction": "PASS",
+            },
+            "breakout_status": "CONFIRMED",
             "exact_pivot_price": 98,
             "inside_buy_zone": True,
             "breakout_volume_confirmation": True,
+            "breakout_volume_ratio_50d": 1.8,
             "relative_volume": 1.8,
             "industry_group_rank": 5,
             "institutional_sponsorship_status": "VERIFIED_SUPPORTIVE",
@@ -305,15 +320,54 @@ def test_buy_now_requires_every_verified_entry_and_market_gate():
     assert unverified["action"] != "BUY NOW"
 
 
+def test_failed_or_price_only_breakout_waits_instead_of_recycling_to_near_pivot():
+    policy = load_policy()
+    common = _rankable_candidate("FAIL", score=90)
+    common.update(
+        {
+            "pivot_verification_status": "verified",
+            "pivot_structure_verification_status": "VERIFIED",
+            "base_candidate_status": "VERIFIED_ALGORITHMIC_PIVOT",
+            "exact_pivot_price": 100,
+            "candidate_resistance": 100,
+            "candidate_resistance_distance_pct": -1,
+            "pivot_gate_statuses": {
+                "prior_uptrend": "PASS",
+                "base_duration": "PASS",
+                "base_depth": "PASS",
+                "weekly_structure": "PASS",
+                "volume_contraction": "PASS",
+            },
+        }
+    )
+
+    failed = score_candidate({**common, "breakout_status": "FAILED"}, policy)
+    price_only = score_candidate({**common, "breakout_status": "PRICE_ONLY"}, policy)
+
+    assert failed["action"] == "WAIT FOR CONFIRMATION"
+    assert "failed" in failed["rationale"].lower()
+    assert price_only["action"] == "WAIT FOR CONFIRMATION"
+    assert "volume" in price_only["rationale"].lower()
+
+
 def test_early_entry_requires_verified_structure_trigger_volume_and_market_gate():
     policy = load_policy()
     candidate = _rankable_candidate("EARLY", score=90)
     candidate.update(
         {
             "pivot_structure_verification_status": "VERIFIED",
+            "pattern_algorithm_version": "oneil_style_ohlcv_patterns_v1",
+            "pivot_gate_statuses": {
+                "prior_uptrend": "PASS",
+                "base_duration": "PASS",
+                "base_depth": "PASS",
+                "weekly_structure": "PASS",
+                "volume_contraction": "PASS",
+            },
             "early_entry_verification_status": "verified",
             "early_entry_price": 97,
             "breakout_volume_confirmation": True,
+            "breakout_volume_ratio_50d": 1.8,
             "relative_volume": 1.8,
             "industry_group_rank": 5,
             "institutional_sponsorship_status": "VERIFIED_SUPPORTIVE",

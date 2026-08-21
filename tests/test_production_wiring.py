@@ -8,6 +8,7 @@ import pandas as pd
 from market_chart_pipeline.adapters import derive_candidates_from_chart, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.cross_market import normalize_cross_market_context
+from market_chart_pipeline.candidate_charts import render_pattern_chart
 from market_chart_pipeline.market_gauge import normalize_dashboard_market_gauge
 from market_chart_pipeline.llm_context import synthesize_cross_market_context
 from market_chart_pipeline.orchestrator import run_daily_review
@@ -15,6 +16,27 @@ from market_chart_pipeline.utils import sha256_file
 
 
 SESSION = "2026-08-14"
+
+
+def _pattern_analysis():
+    return {
+        "status": "BUILDING",
+        "pattern_type": "UNKNOWN",
+        "confidence": "LOW",
+        "confidence_score": 0.25,
+        "algorithm_version": "oneil_style_ohlcv_patterns_v1",
+        "policy_version": "oneil_style_pattern_policy_v1",
+        "pivot_status": "UNVERIFIED",
+        "pivot_price": None,
+        "pivot_basis": None,
+        "candidate_pivot_price": 111,
+        "candidate_resistance": 111,
+        "candidate_resistance_distance_pct": -0.9,
+        "breakout_status": "NOT_BROKEN_OUT",
+        "breakout_volume_confirmation": False,
+        "gates": {"prior_uptrend": {"status": "UNKNOWN"}},
+        "missing_evidence": ["verified_pattern_structure", "exact_pivot_price"],
+    }
 
 
 def _price_history():
@@ -79,13 +101,14 @@ def _chart_payload(pdf_hash):
                 "technical_context": {
                     "relative_strength": {"trend_21d": "RISING", "new_high_52w": True},
                     "volume": {"up_down_volume_ratio_20": 1.5},
-                    "base_analysis": {"status": "CANDIDATE_ONLY", "pivot_price": None, "pivot_status": "VISUAL_CONFIRMATION_REQUIRED"},
+                    "base_analysis": _pattern_analysis(),
                 },
                 "fmp": {},
                 "sources": [{"source_type": "PORTFOLIO", "label": "Current Portfolio"}],
                 "latest_bar_date": SESSION,
                 "daily_chart": "daily.png",
                 "weekly_chart": "weekly.png",
+                "pattern_chart": "pattern.png",
                 "price_history": _price_history(),
             }
         ],
@@ -113,6 +136,8 @@ def test_strict_core_run_checks_sources_hashes_and_set_relationships(tmp_path):
     pdf = chart_dir / f"Market_Chart_Packet_{SESSION}.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%%EOF")
     chart = _chart_payload(sha256_file(pdf))
+    chart["pattern_algorithm_version"] = "oneil_style_ohlcv_patterns_v1"
+    chart["pattern_policy_version"] = "oneil_style_pattern_policy_v1"
     (chart_dir / f"Market_Chart_Data_{SESSION}.json").write_text(json.dumps(chart), encoding="utf-8")
 
     portfolio = tmp_path / "portfolio.json"
@@ -157,6 +182,13 @@ def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_f
     chart_dir.mkdir()
     pdf = chart_dir / f"Market_Chart_Packet_{SESSION}.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%%EOF")
+    chart_assets = chart_dir / "charts"
+    chart_assets.mkdir()
+    history_frame = pd.DataFrame(_price_history()).rename(
+        columns={"date": "Date", "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
+    )
+    history_frame["Date"] = pd.to_datetime(history_frame["Date"])
+    history_frame = history_frame.set_index("Date")
     records = [_chart_payload("unused")["records"][0]]
     manifest_records = {
         "MSFT": {"sources": [{"source_type": "PORTFOLIO", "label": "Current Portfolio"}]}
@@ -169,18 +201,34 @@ def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_f
             "rank": index,
         }
         manifest_records[ticker] = {"sources": [source]}
+        if ticker in {"WL15", "WL12", "WL09", "WL06"}:
+            render_pattern_chart(
+                ticker,
+                history_frame,
+                SESSION,
+                {**_pattern_analysis(), "candidate_pivot_price": 111, "candidate_resistance": 111},
+                chart_assets / f"{ticker}_pattern.png",
+            )
         records.append({
-            "metrics": {"ticker": ticker, "asset_class": "EQUITY", "current_price": 25 + index / 10, "sma21": 24, "sma50": 23, "sma200": 20, "avg_dollar_volume_50": 30_000_000, "quantitative_gate": "CHART_REVIEW"},
+            "metrics": {"ticker": ticker, "asset_class": "EQUITY", "current_price": 109.46, "sma21": 106, "sma50": 102, "sma200": 90, "avg_dollar_volume_50": 30_000_000, "quantitative_gate": "CHART_REVIEW"},
             "technical_context": {
                 "relative_strength": {"status": "VERIFIED", "trend_21d": "RISING", "change_21d_pct": 1 + index / 10, "new_high_52w": index % 3 == 0},
                 "volume": {"status": "VERIFIED", "up_down_volume_ratio_20": 1.2, "accumulation_distribution_estimate": "POSITIVE"},
-                "base_analysis": {"status": "CANDIDATE_ONLY", "pivot_status": "VISUAL_CONFIRMATION_REQUIRED", "candidate_resistance": 26, "candidate_resistance_distance_pct": -2 + index / 20, "base_length_weeks": 7, "base_depth_pct": 18},
+                "base_analysis": {
+                    **_pattern_analysis(),
+                    "candidate_pivot_price": 111,
+                    "candidate_resistance": 111,
+                    "candidate_resistance_distance_pct": -2 + index / 20,
+                    "base_length_weeks": 7,
+                    "base_depth_pct": 18,
+                },
             },
             "fmp": {},
             "sources": [source],
             "latest_bar_date": SESSION,
             "daily_chart": f"{ticker}-daily.png",
             "weekly_chart": f"{ticker}-weekly.png",
+            "pattern_chart": f"{ticker}-pattern.png",
             "price_history": _price_history(),
         })
     requested = ["MSFT", *tickers]
@@ -196,6 +244,8 @@ def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_f
         "errors": {},
         "source_manifest": {"records": manifest_records},
         "artifacts": {"pdf_sha256": sha256_file(pdf)},
+        "pattern_algorithm_version": "oneil_style_ohlcv_patterns_v1",
+        "pattern_policy_version": "oneil_style_pattern_policy_v1",
         "records": records,
     }
     (chart_dir / f"Market_Chart_Data_{SESSION}.json").write_text(json.dumps(payload), encoding="utf-8")
@@ -321,6 +371,8 @@ def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_f
     assert "Brandens Watchlist - Complete Results" not in text
     assert "Visual Review Queue" not in text
     assert "First Charts to Review" not in text
+    assert "the hash-locked algorithmic pattern chart is unavailable" not in text
+    assert all(f"PATTERN OVERLAY — {item['ticker']}" in text for item in top[:4])
     assert "VERIFIED SELL-RULE SANDBOX - MSFT" in text
     assert "Dashboard Gauge posture: Neutral" in text
     assert "Cross-Market Context" in text

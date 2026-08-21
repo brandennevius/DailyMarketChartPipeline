@@ -105,7 +105,7 @@ Tunable thresholds live in `config/trading_policy.json` and include max initial 
 
 ### Global Top 10 CANSLIM setup ranking
 
-Policy `2026.08.20.1` / calculation `daily-review-v4-top10-canslim` replaces the
+Policy `2026.08.21.1` / calculation `daily-review-v5-algorithmic-pivots` replaces the
 report-facing complete-watchlist, visual-review-queue and first-charts lists
 with one deterministic global ranking. The source universe is every distinct
 validated equity ticker in the entire frozen MarketSurge PDF manifest. List
@@ -119,9 +119,11 @@ The five score components are weighted 30% sourced C/A fundamentals, 25%
 relative strength plus available group evidence, 30% technical setup/trend,
 10% supply/demand, and 5% new-high or defensible resistance proximity. Missing
 inputs contribute zero and reduce confidence. Current FMP data does not supply
-a true industry-group rank, institutional sponsorship, estimates/revisions, or
-a fully validated O'Neil base/pivot, so those gaps remain explicit. The frozen
-Market Gauge is an action gate/context input and adds no ranking points.
+a true industry-group rank or institutional sponsorship. Estimates/revisions
+remain explicit when unavailable. Base and pivot evidence is supplied only by
+the versioned exact-session OHLCV engine described below; visual resistance is
+never substituted. The frozen Market Gauge is an action gate/context input and
+adds no ranking points.
 
 `BUY NOW` requires a verified prior uptrend, base type/duration/depth/stage,
 handle quality where applicable, weekly structure, volume contraction, exact
@@ -141,6 +143,38 @@ Canonical JSON retains `candidate_results`, `candidate_universe_audit`, and
 page/list/rank, score component, missing field, trigger, and invalidation. The
 audit independently reconstructs the eligible order, checks set relationships,
 and hashes the candidate outputs into the LLM non-influence invariant.
+
+### Deterministic O'Neil-style OHLCV pattern evidence
+
+`oneil_style_ohlcv_patterns_v1` with policy
+`oneil_style_pattern_policy_v1` consumes only bounded FMP daily OHLCV through
+the completed session and resamples it to weekly bars whose index is the actual
+last market date in each week. It scans recent windows for cup with handle, cup
+without handle, double bottom, and flat base candidates. There is no screenshot
+classification and no look-ahead beyond the requested session.
+
+Every candidate freezes the prior-uptrend calculation; base type, duration,
+depth, stage proxy, dates and price extremes; weekly 10/40-week moving-average
+alignment; late-base volume contraction; handle duration/depth/upper-half
+placement and flat-to-down behavior where applicable; double-bottom W geometry
+and low/midpoint relations; the exact conventional pivot reference plus the
+configured $0.10 increment; the 5% buy-zone ceiling; breakout close/date and
+volume ratio against the prior 50 daily sessions; extension/failure state; and
+price support/invalidation evidence. Every gate is `PASS`, `FAIL`, or `UNKNOWN`
+with its source date range and values.
+
+`VERIFIED_ALGORITHMIC_PIVOT` requires every structural hard gate to pass.
+`BUY NOW` additionally requires a confirmed exact-session breakout in the buy
+zone on at least 1.5x prior-50-day volume, buying-permissive frozen Market Gauge
+evidence, verified C/A quality, leadership/group rank, sponsorship, and no near
+earnings risk. `EARLY ENTRY` remains disabled unless a separately versioned
+early-entry rule verifies it. Pattern candidates that fail or lack evidence
+remain `WATCH / BUILDING`, `WAIT FOR CONFIRMATION`, `AVOID`, or
+`INSUFFICIENT EVIDENCE`. Annotated Top-10 charts show the frozen base window,
+candidate or verified pivot, buy zone, evidence markers, breakout and volume.
+The report labels this as algorithmic O'Neil-style recognition—not proprietary
+MarketSurge/IBD recognition—and the canonical audit rejects future-dated
+pattern evidence or an actionable result without all gates.
 
 The transcript-derived sell hierarchy is deterministic:
 
@@ -256,7 +290,8 @@ or `FAILED`; delivery failure never rebuilds the packet.
 The optional Cross-Market narrative uses the OpenAI Responses API with strict
 structured JSON. `OPENAI_API_KEY` is a GitHub Actions secret and
 `OPENAI_MARKET_REVIEW_MODEL` is an optional variable (default
-`gpt-5.4-nano`). The request enables neither tools nor response storage. Its
+`gpt-5-mini`). The Responses request uses strict Structured Outputs and enables
+neither tools nor response storage. Its
 only input is the canonical completed-session evidence contract built from
 normalized/deduplicated FMP general, stock, forex and crypto news, exact-session
 economic calendar and Treasury records, plus the frozen Dashboard Market Gauge
@@ -271,6 +306,13 @@ rendering. Frozen packet replay never calls OpenAI again, and the synthesis is
 excluded from all deterministic regime, exposure, breadth, portfolio,
 sell-rule, candidate, Top-10 ranking, candidate-universe audit, shakeout and
 audit-priority decisions.
+
+The strict schema uses only the supported Structured Outputs subset; prose
+length and citation uniqueness are enforced after parsing rather than through
+unsupported JSON Schema keywords. API errors preserve safe HTTP status,
+OpenAI error code/type/parameter/message and request ID in the frozen fallback
+artifact. The fallback never includes the API key, request authorization, or
+the full evidence body and never blocks deterministic report generation.
 
 Worker API contract:
 

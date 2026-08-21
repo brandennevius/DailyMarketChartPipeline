@@ -5,6 +5,7 @@ from pathlib import Path
 from market_chart_pipeline.cross_market import collect_fmp_cross_market_context
 from market_chart_pipeline.llm_context import (
     DEFAULT_MODEL,
+    OUTPUT_JSON_SCHEMA,
     synthesize_cross_market_context,
     validate_frozen_synthesis,
 )
@@ -104,7 +105,7 @@ def _model_output():
 def _response(output):
     return {
         "status": "completed",
-        "model": "gpt-5.4-nano-2026-08-01",
+        "model": "gpt-5-mini-2025-08-07",
         "usage": {"input_tokens": 1000, "output_tokens": 120, "total_tokens": 1120},
         "output": [{
             "type": "message",
@@ -133,14 +134,66 @@ def test_valid_synthesis_is_strict_frozen_and_hash_verified():
 
     assert synthesis["status"] == "AVAILABLE"
     assert synthesis["model"] == DEFAULT_MODEL
-    assert synthesis["resolved_model"] == "gpt-5.4-nano-2026-08-01"
+    assert synthesis["resolved_model"] == "gpt-5-mini-2025-08-07"
     assert synthesis["output_sha256"] == sha256_text(canonical_json(_model_output()))
     assert synthesis["request_contract"]["input_sha256"] == synthesis["input_sha256"]
     assert captured["secret"] == "test-key"
     assert captured["request"]["store"] is False
-    assert captured["request"]["tools"] == []
-    assert captured["request"]["tool_choice"] == "none"
+    assert "tools" not in captured["request"]
+    assert "tool_choice" not in captured["request"]
+    assert "reasoning" not in captured["request"]
     assert validate_frozen_synthesis(synthesis, context, regime) == synthesis
+
+
+def test_openai_contract_uses_documented_model_and_supported_schema_subset():
+    assert DEFAULT_MODEL == "gpt-5-mini"
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield key
+                yield from walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from walk(child)
+
+    keywords = set(walk(OUTPUT_JSON_SCHEMA))
+    assert "uniqueItems" not in keywords
+    assert "minLength" not in keywords
+    assert "maxLength" not in keywords
+
+
+def test_openai_400_preserves_safe_error_details(monkeypatch):
+    context, regime = _context_and_regime()
+
+    class FakeResponse:
+        ok = False
+        status_code = 400
+        headers = {"x-request-id": "req_safe_123"}
+
+        @staticmethod
+        def json():
+            return {
+                "error": {
+                    "message": "Invalid schema keyword: uniqueItems",
+                    "type": "invalid_request_error",
+                    "param": "text.format.schema",
+                    "code": "invalid_json_schema",
+                }
+            }
+
+    monkeypatch.setattr("market_chart_pipeline.llm_context.requests.post", lambda *args, **kwargs: FakeResponse())
+    synthesis = synthesize_cross_market_context(SESSION, context, regime, api_key="test-key")
+    assert synthesis["status"] == "INSUFFICIENT_EVIDENCE"
+    assert synthesis["reason_code"] == "OPENAI_API_ERROR"
+    assert synthesis["api_error"] == {
+        "status_code": 400,
+        "code": "invalid_json_schema",
+        "type": "invalid_request_error",
+        "param": "text.format.schema",
+        "message": "Invalid schema keyword: uniqueItems",
+        "request_id": "req_safe_123",
+    }
 
 
 def test_unknown_citation_is_rejected_to_visible_fallback():

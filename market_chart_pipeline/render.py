@@ -132,7 +132,8 @@ def _candidate_context(item: dict[str, Any]) -> str:
         f"RS {snap.get('rs_trend') or 'unavailable'}"
         f" ({_pct(snap.get('rs_change_21d_pct'))}); rel vol {_number(snap.get('relative_volume'))}x; "
         f"quarter EPS {_pct(snap.get('quarterly_eps_growth_pct'))}; sales {_pct(snap.get('quarterly_sales_growth_pct'))}; "
-        f"earnings {earnings}"
+        f"earnings {earnings}; breakout {snap.get('breakout_status') or 'unavailable'} "
+        f"({_number(snap.get('breakout_volume_ratio_50d'))}x 50-day volume)"
     )
 
 
@@ -170,7 +171,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
         "",
         "## Decision Summary",
         f"- {_headline(packet)}",
-        "- BUY NOW and EARLY ENTRY require fully verified setup, volume, leadership, earnings-risk, and market-permission gates; algorithmic resistance alone is never actionable.",
+        "- BUY NOW and EARLY ENTRY require a verified algorithmic pivot plus breakout-volume, leadership, earnings-risk, and market-permission gates; an unverified algorithmic candidate is never actionable.",
         f"- Account value: {_money(risk.get('account_value'))}; gross exposure: {_pct(risk.get('gross_exposure_pct'))}; open P&L: {_money(risk.get('total_open_pnl'))}.",
         f"- Remaining risk to stops: {_money(risk.get('total_remaining_risk_to_stops'))} ({_pct(risk.get('total_remaining_risk_pct'))} of equity).",
         "",
@@ -231,6 +232,18 @@ def render_markdown(packet: dict[str, Any]) -> str:
                 "",
                 "### LLM Synthesis of Frozen Sources",
                 f"- **LLM synthesis unavailable / INSUFFICIENT_EVIDENCE.** {synthesis.get('reason') or 'No validated frozen synthesis was supplied.'}",
+                *(
+                    [
+                        "- Safe API diagnostic: "
+                        f"HTTP {(synthesis.get('api_error') or {}).get('status_code')}; "
+                        f"code {(synthesis.get('api_error') or {}).get('code') or '-'}; "
+                        f"type {(synthesis.get('api_error') or {}).get('type') or '-'}; "
+                        f"parameter {(synthesis.get('api_error') or {}).get('param') or '-'}; "
+                        f"message {(synthesis.get('api_error') or {}).get('message') or '-'}; "
+                        f"request ID {(synthesis.get('api_error') or {}).get('request_id') or '-'}."
+                    ]
+                    if synthesis.get("api_error") else []
+                ),
             ]
         )
     lines.extend(["", "### Frozen Evidence and Provenance"])
@@ -278,7 +291,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
         resistance_status = (
             f"verified pivot {_money(snap.get('exact_pivot_price'), 2)}"
             if snap.get("pivot_verification_status") == "verified"
-            else f"algorithmic resistance {_money(snap.get('candidate_resistance'), 2)} (not a verified pivot)"
+            else f"unverified algorithmic pivot candidate {_money(snap.get('candidate_resistance'), 2)}"
         )
         lines.extend(
             [
@@ -286,6 +299,8 @@ def render_markdown(packet: dict[str, Any]) -> str:
                 f"### #{item['rank']} {item['ticker']} — {item.get('action')} | Score {_number(item.get('internal_canslim_score'))} | {item.get('confidence')} confidence",
                 f"- **Origin:** {_source_provenance(item)}.",
                 f"- **Setup:** {snap.get('setup_pattern_state') or 'INSUFFICIENT EVIDENCE'}; {resistance_status}; distance {_pct(snap.get('candidate_resistance_distance_pct'))}.",
+                f"- **Pattern evidence:** {snap.get('pattern_type') or 'UNKNOWN'} from {snap.get('base_start') or '-'} through {snap.get('base_end') or '-'}; depth {_pct(snap.get('base_depth_pct'))}; pivot basis {snap.get('pivot_basis') or 'unavailable'}; buy-zone upper {_money(snap.get('buy_zone_upper_bound'), 2)}.",
+                f"- **Breakout evidence:** {snap.get('breakout_status') or 'unavailable'} on {snap.get('breakout_date') or '-'}; {_number(snap.get('breakout_volume_ratio_50d'))}x prior 50-day volume.",
                 f"- **Context:** {_candidate_context(item)}.",
                 f"- **Why ranked:** {item.get('why_ranked')}",
                 f"- **Missing evidence:** {', '.join(item.get('missing_evidence') or []) or 'none'}.",
@@ -299,7 +314,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
             "",
             "## Evidence Limits",
             "- A proper O'Neil market regime requires index follow-through and distribution-day evidence, which was not present in this packet.",
-            "- Candidate resistance is a visual reference only. It is not treated as a verified pivot or permission to buy.",
+            "- VERIFIED_ALGORITHMIC_PIVOT means every published deterministic OHLCV structure gate passed. It is not MarketSurge/IBD proprietary pattern recognition and does not by itself permit a buy.",
             f"- MarketSurge universe audit: {universe.get('distinct_manifest_ticker_count', 0)} distinct tickers; {universe.get('valid_manifest_equity_count', 0)} valid equities; {universe.get('open_position_exclusion_count', 0)} open-position exclusions; {universe.get('non_equity_exclusion_count', 0)} non-equity exclusions; {len(universe.get('rejected') or [])} rejected after evidence/eligibility gates.",
             "- Complete classifications, rejection reasons, provenance, and scoring components remain in canonical JSON under candidate_results and candidate_universe_audit.",
             "- News and LLM synthesis cannot create, remove, score, or reorder candidates.",
@@ -459,7 +474,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     ]
     story.append(_table(breadth_rows, [0.78 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 0.88 * inch, 0.95 * inch, 0.95 * inch], styles, set(range(7))))
     story.append(Spacer(1, 8))
-    story.append(_p("Entry posture: BUY NOW and EARLY ENTRY require verified entry, volume, leadership, earnings-risk, and market-permission gates. Algorithmic resistance alone is never actionable.", styles["body"]))
+    story.append(_p("Entry posture: BUY NOW and EARLY ENTRY require a verified algorithmic pivot plus breakout volume, leadership, earnings-risk, and market-permission gates. An unverified algorithmic candidate is never actionable.", styles["body"]))
 
     story.append(_p("Cross-Market Context", styles["h1"]))
     window = cross_market.get("lookback_window") or {}
@@ -488,6 +503,14 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             f"LLM synthesis unavailable / INSUFFICIENT_EVIDENCE. {synthesis.get('reason') or 'No validated frozen synthesis was supplied.'}",
             styles["body"],
         ))
+        if synthesis.get("api_error"):
+            api_error = synthesis["api_error"]
+            story.append(_p(
+                f"Safe API diagnostic: HTTP {api_error.get('status_code')}; code {api_error.get('code') or '-'}; "
+                f"type {api_error.get('type') or '-'}; parameter {api_error.get('param') or '-'}; "
+                f"message {api_error.get('message') or '-'}; request ID {api_error.get('request_id') or '-'}.",
+                styles["small"],
+            ))
     story.append(_p("Frozen evidence and provenance", styles["h2"]))
     for article in (cross_market.get("cited_context") or [])[:8]:
         suffix = f" - {article.get('publisher') or 'publisher unavailable'}, {article.get('published_at') or 'time unavailable'} [{str(article.get('category') or '').upper()}]"
@@ -572,9 +595,9 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             story.append(_p("Top 10 CANSLIM Setups (continued)", styles["title"]))
         snap = item.get("snapshot") or {}
         pivot_text = (
-            f"VERIFIED pivot {_money(snap.get('exact_pivot_price'), 2)}"
+            f"VERIFIED ALGORITHMIC PIVOT {_money(snap.get('exact_pivot_price'), 2)}"
             if snap.get("pivot_verification_status") == "verified"
-            else f"candidate resistance {_money(snap.get('candidate_resistance'), 2)}; NOT A VERIFIED PIVOT"
+            else f"UNVERIFIED ALGORITHMIC PIVOT CANDIDATE {_money(snap.get('candidate_resistance'), 2)}"
         )
         missing_items = list(item.get("missing_evidence") or [])
         missing = ", ".join(missing_items[:6]) or "none"
@@ -583,6 +606,8 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         body = Paragraph(
             "<b>Origin:</b> " + escape(_source_provenance(item, 2)) + "<br/>"
             + "<b>Setup/pivot:</b> " + escape(f"{snap.get('setup_pattern_state') or 'INSUFFICIENT EVIDENCE'} | {pivot_text} | distance {_pct(snap.get('candidate_resistance_distance_pct'))}") + "<br/>"
+            + "<b>Pattern:</b> " + escape(f"{snap.get('pattern_type') or 'UNKNOWN'} {snap.get('base_start') or '-'} to {snap.get('base_end') or '-'} | depth {_pct(snap.get('base_depth_pct'))} | buy-zone upper {_money(snap.get('buy_zone_upper_bound'), 2)}") + "<br/>"
+            + "<b>Breakout:</b> " + escape(f"{snap.get('breakout_status') or 'unavailable'} {snap.get('breakout_date') or '-'} | {_number(snap.get('breakout_volume_ratio_50d'))}x prior 50-day volume") + "<br/>"
             + "<b>Context:</b> " + escape(_candidate_context(item)) + "<br/>"
             + "<b>Why ranked:</b> " + escape(item.get("why_ranked") or "insufficient evidence") + " <b>Missing:</b> " + escape(missing) + ".<br/>"
             + "<b>Action:</b> " + escape(f"{item.get('action')}. {item.get('rationale')}") + " <b>Trigger:</b> " + escape(item.get("trigger") or "No verified trigger") + "<br/>"
@@ -608,6 +633,32 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]))
         story.append(KeepTogether([card, Spacer(1, 5)]))
+
+    chart_setups = top_setups[:4]
+    if chart_setups:
+        story.append(PageBreak())
+        story.append(_p("Algorithmic Pattern Review — Top 4", styles["title"]))
+        story.append(_p("OHLCV overlays are calculated only from exact-session FMP bars. These are deterministic O'Neil-style candidates, not MarketSurge/IBD proprietary recognition.", styles["subtitle"]))
+        for index, item in enumerate(chart_setups):
+            if index and index % 2 == 0:
+                story.append(PageBreak())
+                story.append(_p("Algorithmic Pattern Review — Top 4 (continued)", styles["title"]))
+            snap = item.get("snapshot") or {}
+            asset = snap.get("pattern_chart_asset") or {}
+            asset_path = chart_dir / asset.get("file", "") if chart_dir and asset.get("file") else None
+            story.append(_p(f"PATTERN OVERLAY — {item.get('ticker')} (rank #{item.get('rank')}) — {item.get('action')}", styles["h2"]))
+            if asset_path and asset_path.is_file():
+                if not asset.get("sha256") or sha256_file(asset_path) != asset.get("sha256"):
+                    raise ValidationError(f"{item.get('ticker')}: pattern chart asset hash mismatch")
+                story.append(Image(str(asset_path), width=6.75 * inch, height=3.55 * inch, kind="proportional"))
+                story.append(_p(
+                    f"{snap.get('pattern_type') or 'UNKNOWN'} | {snap.get('base_candidate_status') or 'INSUFFICIENT_EVIDENCE'} | pivot {_money(snap.get('exact_pivot_price') or snap.get('candidate_resistance'), 2)} | breakout {snap.get('breakout_status') or 'unavailable'}.",
+                    styles["small"],
+                ))
+            else:
+                if packet.get("audit_profile") == "strict-core":
+                    raise ValidationError(f"{item.get('ticker')}: strict report requires a hash-locked algorithmic pattern chart")
+                story.append(_p("INSUFFICIENT_EVIDENCE: the hash-locked algorithmic pattern chart is unavailable.", styles["body"]))
 
     story.append(PageBreak())
     story.append(_p("Evidence, Controls, and Limits", styles["title"]))
@@ -636,7 +687,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         gaps.append("One or more portfolio positions lack a verified numeric pivot; profit-zone and rapid-advance rules remain unavailable for those positions.")
     if any(_event(item, "peak_drawdown_trail").get("status") == "INSUFFICIENT_EVIDENCE" for item in results):
         gaps.append("One or more positions lack verified highest-close history, so their gain-protection trail remains unavailable.")
-    gaps.append("The chart engine identifies candidate resistance for visual review but deliberately does not promote it to a verified pivot.")
+    gaps.append("Algorithmic pivots are promoted only when every versioned OHLCV structural gate passes; proprietary MarketSurge/IBD pattern recognition is not claimed.")
     for line in gaps:
         story.append(_p(f"• {line}", styles["body"]))
     story.append(_p("Audit identity", styles["h1"]))
@@ -695,6 +746,13 @@ def audit_rendered_pdf(pdf_path: Path, packet: dict[str, Any]) -> list[dict[str,
         matches = [index + 1 for index, text in enumerate(page_text) if anchor in text]
         if len(matches) != 1:
             raise ValidationError(f"Rendered PDF must contain exactly one ranked setup card for {item.get('ticker')}")
+    for item in top_setups[:4]:
+        anchor = f"PATTERN OVERLAY — {item.get('ticker')} (rank #{item.get('rank')})"
+        matches = [index + 1 for index, text in enumerate(page_text) if anchor in text]
+        if len(matches) != 1:
+            raise ValidationError(f"Rendered PDF must contain exactly one annotated pattern overlay for {item.get('ticker')}")
+        if packet.get("audit_profile") == "strict-core" and "hash-locked algorithmic pattern chart is unavailable" in page_text[matches[0] - 1]:
+            raise ValidationError(f"{item.get('ticker')}: strict rendered PDF substituted a missing pattern chart")
     evidence.append({
         "gate": "top_canslim_render",
         "status": "pass",

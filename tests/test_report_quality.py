@@ -234,6 +234,10 @@ def test_top10_replaces_duplicate_lists_and_position_failure_page_is_preserved(t
     assert "Visual Review Queue" not in text
     assert "First Charts to Review" not in text
 
+    packet["audit_profile"] = "strict-core"
+    with pytest.raises(ValidationError, match="requires a hash-locked algorithmic pattern chart"):
+        render_pdf(packet, report_dir=tmp_path)
+
 
 def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
     packet = {

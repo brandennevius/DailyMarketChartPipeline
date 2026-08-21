@@ -410,6 +410,11 @@ def _candidate_trigger(candidate: dict[str, Any], action: str, ranking: dict[str
         )
     if action == CANDIDATE_ACTION_EARLY and candidate.get("early_entry_price") is not None:
         return f"Verified early-entry trigger through {float(candidate['early_entry_price']):.2f} with confirmed volume."
+    if candidate.get("pivot_verification_status") == "verified" and candidate.get("exact_pivot_price") is not None:
+        return (
+            f"Watch the verified algorithmic pivot at {float(candidate['exact_pivot_price']):.2f}; require a close through it "
+            f"with breakout-day volume >= {float(ranking['minimum_breakout_relative_volume']):.2f}x the prior 50-day average."
+        )
     resistance = candidate.get("candidate_resistance")
     if resistance is not None:
         return (
@@ -421,6 +426,12 @@ def _candidate_trigger(candidate: dict[str, Any], action: str, ranking: dict[str
 
 def _candidate_risk(candidate: dict[str, Any]) -> str:
     parts = []
+    invalidation = candidate.get("invalidation_support") or {}
+    if invalidation.get("primary") is not None:
+        parts.append(
+            f"pattern invalidation below {float(invalidation['primary']):.2f} "
+            f"({invalidation.get('basis') or 'algorithmic support'})"
+        )
     if candidate.get("sma50") is not None:
         parts.append(f"technical deterioration below 50-day {float(candidate['sma50']):.2f}")
     if candidate.get("sma200") is not None:
@@ -551,11 +562,16 @@ def score_candidate(
     elif (
         candidate.get("pivot_verification_status") == "verified"
         and candidate.get("pivot_structure_verification_status") == "VERIFIED"
+        and candidate.get("pattern_algorithm_version") == "oneil_style_ohlcv_patterns_v1"
+        and candidate.get("pattern_policy_version") == "oneil_style_pattern_policy_v1"
+        and candidate.get("breakout_status") == "CONFIRMED"
+        and bool(candidate.get("pivot_gate_statuses"))
+        and all(status == "PASS" for status in candidate["pivot_gate_statuses"].values())
         and candidate.get("exact_pivot_price") is not None
         and candidate.get("inside_buy_zone") is True
         and candidate.get("breakout_volume_confirmation") is True
-        and candidate.get("relative_volume") is not None
-        and float(candidate["relative_volume"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
+        and candidate.get("breakout_volume_ratio_50d") is not None
+        and float(candidate["breakout_volume_ratio_50d"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
         and components["fundamental_quality"] >= float(ranking.get("minimum_fundamental_score_for_action", 70))
         and components["relative_strength_group"] >= float(ranking.get("minimum_rs_group_score_for_action", 65))
         and components["technical_setup"] >= float(ranking.get("minimum_technical_score_for_action", 70))
@@ -573,10 +589,14 @@ def score_candidate(
     elif (
         candidate.get("early_entry_verification_status") == "verified"
         and candidate.get("pivot_structure_verification_status") == "VERIFIED"
+        and candidate.get("pattern_algorithm_version") == "oneil_style_ohlcv_patterns_v1"
+        and candidate.get("pattern_policy_version") == "oneil_style_pattern_policy_v1"
+        and bool(candidate.get("pivot_gate_statuses"))
+        and all(status == "PASS" for status in candidate["pivot_gate_statuses"].values())
         and candidate.get("early_entry_price") is not None
         and candidate.get("breakout_volume_confirmation") is True
-        and candidate.get("relative_volume") is not None
-        and float(candidate["relative_volume"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
+        and candidate.get("breakout_volume_ratio_50d") is not None
+        and float(candidate["breakout_volume_ratio_50d"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
         and components["fundamental_quality"] >= float(ranking.get("minimum_fundamental_score_for_action", 70))
         and components["relative_strength_group"] >= float(ranking.get("minimum_rs_group_score_for_action", 65))
         and components["technical_setup"] >= float(ranking.get("minimum_technical_score_for_action", 70))
@@ -595,8 +615,16 @@ def score_candidate(
         classification = "WAIT_FOR_CONFIRMATION"
         action = CANDIDATE_ACTION_WAIT
         rationale = "Price is beyond the configured verified-entry buy zone; wait for a new setup."
+    elif candidate.get("breakout_status") in {"PRICE_ONLY", "FAILED"}:
+        classification = "WAIT_FOR_CONFIRMATION"
+        action = CANDIDATE_ACTION_WAIT
+        rationale = (
+            "The calculated pivot was crossed without the required breakout-volume confirmation; wait for a new valid trigger."
+            if candidate.get("breakout_status") == "PRICE_ONLY"
+            else "The prior breakout failed back below the calculated pivot; wait for a repaired base and new valid trigger."
+        )
     elif (
-        candidate.get("base_candidate_status") == "CANDIDATE_ONLY"
+        candidate.get("base_candidate_status") == "VERIFIED_ALGORITHMIC_PIVOT"
         and candidate.get("candidate_resistance_distance_pct") is not None
         and float(ranking.get("near_resistance_lower_pct", -5))
         <= float(candidate["candidate_resistance_distance_pct"])
@@ -604,11 +632,11 @@ def score_candidate(
     ):
         classification = "WATCH_NEAR_PIVOT"
         action = CANDIDATE_ACTION_NEAR
-        rationale = "Price is near algorithmic resistance, but the base and pivot remain unverified."
-    elif candidate.get("base_candidate_status") == "CANDIDATE_ONLY":
+        rationale = "A deterministic O'Neil-style base and algorithmic pivot passed every structural gate; wait for the verified breakout and volume trigger."
+    elif candidate.get("base_candidate_status") in {"VERIFIED_ALGORITHMIC_PIVOT", "BUILDING"}:
         classification = "WATCH_BUILDING"
         action = CANDIDATE_ACTION_BUILDING
-        rationale = "A technical base candidate exists, but it is not a verified actionable structure."
+        rationale = "A deterministic pattern candidate exists, but it is still building or is not near its verified algorithmic trigger."
     if action == CANDIDATE_ACTION_BUY and candidate.get("pivot_verification_status") != "verified":
         raise ValueError("BUY NOW cannot be assigned without a verified pivot")
     if action == CANDIDATE_ACTION_EARLY and candidate.get("early_entry_verification_status") != "verified":
@@ -651,9 +679,12 @@ def score_candidate(
                 "market_surge_candidate", "is_current_open_position", "chart_evidence_status", "setup_pattern_state",
                 "base_candidate_status", "base_length_weeks", "base_depth_pct", "pivot_missing_evidence",
                 "pivot_verification_status", "pivot_structure_verification_status", "pivot_gate_statuses",
-                "exact_pivot_price", "early_entry_price", "early_entry_verification_status",
-                "breakout_volume_confirmation", "sma21", "sma50", "sma200", "available_dimensions",
-                "daily_chart_asset",
+                "exact_pivot_price", "pivot_basis", "buy_zone_upper_bound", "early_entry_price", "early_entry_verification_status",
+                "breakout_status", "breakout_date", "breakout_volume_ratio_50d", "breakout_volume_confirmation",
+                "inside_buy_zone", "extended", "pattern_type", "pattern_confidence", "pattern_confidence_score",
+                "pattern_algorithm_version", "pattern_policy_version", "base_start", "base_end", "left_side_high",
+                "base_low", "handle", "pattern_gates", "pattern_evidence_bars", "invalidation_support", "pattern_reason",
+                "sma21", "sma50", "sma200", "available_dimensions", "daily_chart_asset", "pattern_chart_asset",
             ]
         },
         "events": [

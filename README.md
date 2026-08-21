@@ -13,7 +13,7 @@ This repository is intentionally separate from TradingDashboard. It accepts a cu
 Optional frozen-source narrative synthesis:
 
 - `OPENAI_API_KEY` enables the OpenAI Responses API synthesis in Cross-Market Context.
-- `OPENAI_MARKET_REVIEW_MODEL` is an optional GitHub Actions variable; it defaults to `gpt-5.4-nano`.
+- `OPENAI_MARKET_REVIEW_MODEL` is an optional GitHub Actions variable; it defaults to the documented Responses API model `gpt-5-mini`.
 
 When the OpenAI key is absent or the response fails strict validation, the
 deterministic FMP context still renders and the narrative is labeled
@@ -70,6 +70,17 @@ provide volume, while volume-dependent conclusions remain insufficient evidence.
 
 The quantitative gate is a ranking/rejection aid only. It never declares a stock actionable.
 
+Every equity chart packet also runs versioned `oneil_style_ohlcv_patterns_v1`
+analysis on the same exact-session FMP bars. The engine resamples daily bars to
+actual-date weekly evidence and conservatively tests cup with handle, cup
+without handle, double bottom, and flat base candidates. It freezes the base
+window, correction depth, prior-uptrend/stage proxies, weekly moving-average
+structure, volume contraction, conventional pivot calculation, breakout date,
+breakout volume versus the prior 50 sessions, buy zone, and invalidation. A
+pattern is `VERIFIED_ALGORITHMIC_PIVOT` only when every published structural
+gate passes. These are auditable O'Neil-style algorithmic candidates, not
+proprietary MarketSurge/IBD pattern recognition.
+
 ## Deterministic daily review
 
 See [docs/daily-review.md](docs/daily-review.md) for the versioned policy,
@@ -92,3 +103,7 @@ versions are frozen before report rendering. Packet replay renders that stored
 result without another model call. A separate hash invariant excludes this
 narrative from regime, exposure, breadth, portfolio, sell-rule, candidate,
 Top-10 ranking, candidate-universe audit and shakeout decisions.
+The request uses strict Structured Outputs without tools, autonomous web access,
+or response storage. Safe API failures retain only HTTP status, OpenAI error
+code/type/parameter/message, and request ID; credentials and the full request
+body are never included in packet diagnostics.
