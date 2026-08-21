@@ -103,8 +103,10 @@ def test_cross_market_context_is_bounded_deduplicated_sourced_and_deterministic(
     assert context["economic_calendar"][0]["event"] == "Retail Sales"
     assert context["treasury_context"]["maturities_pct"]["year10"] == 4.22
     assert context["interpretation"]["may_override_deterministic_outputs"] is False
-    assert context["future_synthesis_boundary"]["billable_model_used"] is False
-    assert context["future_synthesis_boundary"]["network_access_allowed"] is False
+    assert context["llm_synthesis_boundary"]["autonomous_web_or_tool_access"] is False
+    assert context["news"][0]["evidence_id"].startswith("FMP_NEWS_")
+    assert context["economic_calendar"][0]["evidence_id"] == "FMP_ECON_001"
+    assert context["treasury_context"]["evidence_id"] == "FMP_TREASURY_001"
     assert normalize_cross_market_context(deepcopy(raw)) == context
 
 
@@ -123,4 +125,3 @@ def test_cross_market_entitlement_failures_are_visible_insufficient_evidence():
     assert not context["cited_context"]
     assert all(result["status"] == "INSUFFICIENT_EVIDENCE" for result in raw["endpoint_results"].values())
     assert all("not entitled" in result["error"] for result in raw["endpoint_results"].values())
-

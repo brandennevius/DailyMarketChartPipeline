@@ -9,6 +9,7 @@ from market_chart_pipeline.adapters import derive_candidates_from_chart, normali
 from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.cross_market import normalize_cross_market_context
 from market_chart_pipeline.market_gauge import normalize_dashboard_market_gauge
+from market_chart_pipeline.llm_context import synthesize_cross_market_context
 from market_chart_pipeline.orchestrator import run_daily_review
 from market_chart_pipeline.utils import sha256_file
 
@@ -250,7 +251,18 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     cross_source = tmp_path / "fmp-cross-market-context.json"
     cross_source.write_text(json.dumps(cross_raw), encoding="utf-8")
     market_data = normalize_dashboard_market_gauge(gauge_payload, SESSION)
-    market_data["cross_market_context"] = normalize_cross_market_context(cross_raw)
+    cross_context = normalize_cross_market_context(cross_raw)
+    synthesis = synthesize_cross_market_context(
+        SESSION,
+        cross_context,
+        market_data["market_regime"],
+        api_key="",
+        generated_at="2026-08-14T21:06:00Z",
+    )
+    cross_context["llm_synthesis"] = synthesis
+    market_data["cross_market_context"] = cross_context
+    synthesis_source = tmp_path / "openai-cross-market-synthesis.json"
+    synthesis_source.write_text(json.dumps(synthesis), encoding="utf-8")
     market_data_path = tmp_path / "market-data.json"
     market_data_path.write_text(json.dumps(market_data), encoding="utf-8")
     archive = tmp_path / "chart.zip"
@@ -262,6 +274,7 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
             ("marketsurge_scan", scan),
             ("market_gauge_json", gauge),
             ("fmp_cross_market_context", cross_source),
+            ("openai_cross_market_synthesis", synthesis_source),
             ("chart_packet_artifact", archive),
         ]
     ]
@@ -291,6 +304,7 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     assert "Cross-Market Context" in text
     assert "Treasury yields move" in text
     assert next(item for item in gates if item["gate"] == "cross_market_frozen_context")["context_status"] == "PARTIAL"
+    assert next(item for item in gates if item["gate"] == "cross_market_llm_synthesis")["synthesis_status"] == "INSUFFICIENT_EVIDENCE"
 
 
 def test_strict_core_run_rejects_tampered_source(tmp_path):

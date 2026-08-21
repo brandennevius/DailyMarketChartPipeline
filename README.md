@@ -10,6 +10,15 @@ This repository is intentionally separate from TradingDashboard. It accepts a cu
 
 - `FMP_API_KEY`
 
+Optional frozen-source narrative synthesis:
+
+- `OPENAI_API_KEY` enables the OpenAI Responses API synthesis in Cross-Market Context.
+- `OPENAI_MARKET_REVIEW_MODEL` is an optional GitHub Actions variable; it defaults to `gpt-5.4-nano`.
+
+When the OpenAI key is absent or the response fails strict validation, the
+deterministic FMP context still renders and the narrative is labeled
+`LLM synthesis unavailable / INSUFFICIENT_EVIDENCE`.
+
 Optional email delivery secrets:
 
 - `GMAIL_ADDRESS`
@@ -71,3 +80,12 @@ review queue, selected candidate charts, and a compact evidence appendix.
 Each open equity position also receives a hash-locked sell-rule sandbox chart
 that overlays the configured percentage, ATR, trailing, profit-zone, and time
 boundaries on current-session candles.
+
+Cross-Market Context may include a short OpenAI synthesis. The model receives
+only the frozen normalized FMP records and frozen Dashboard Market Gauge for
+the completed session, with Responses API tools disabled and storage disabled.
+Its strict JSON result, citations, request/input/output hashes, model and schema
+versions are frozen before report rendering. Packet replay renders that stored
+result without another model call. A separate hash invariant excludes this
+narrative from regime, exposure, breadth, portfolio, sell-rule, candidate and
+shakeout decisions.

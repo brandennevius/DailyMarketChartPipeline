@@ -9,6 +9,27 @@ from .rules import evaluate_position, evaluate_shakeout, score_candidate
 from .utils import canonical_json, sha256_file, sha256_text
 
 
+LLM_NON_INFLUENCE_FIELDS = (
+    "market_regime",
+    "exposure_guidance",
+    "market_breadth",
+    "portfolio_risk",
+    "sell_rule_results",
+    "candidate_results",
+    "shakeout_results",
+)
+
+
+def llm_non_influence_record(packet: dict[str, Any]) -> dict[str, Any]:
+    decisions = {field: packet.get(field) for field in LLM_NON_INFLUENCE_FIELDS}
+    return {
+        "schema_version": "llm_non_influence_v1",
+        "covered_fields": list(LLM_NON_INFLUENCE_FIELDS),
+        "decision_outputs_sha256": sha256_text(canonical_json(decisions)),
+        "statement": "Cross-market LLM synthesis is excluded from every deterministic decision input and output.",
+    }
+
+
 def _source_record(path: Path | None, label: str) -> dict[str, Any]:
     if path is None:
         return {"label": label, "path": None, "sha256": None, "status": "not_provided"}
@@ -183,4 +204,5 @@ def build_review_packet(
         },
         "validation_evidence": [],
     }
+    packet["llm_non_influence"] = llm_non_influence_record(packet)
     return freeze_packet(packet)

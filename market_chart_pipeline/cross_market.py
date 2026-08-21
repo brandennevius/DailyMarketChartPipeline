@@ -231,6 +231,12 @@ def normalize_cross_market_context(raw: dict[str, Any]) -> dict[str, Any]:
     news, rejected = _normalize_news(raw)
     economic = _economic_events(raw)
     treasury = _treasury_context(raw)
+    for index, article in enumerate(news, start=1):
+        article["evidence_id"] = f"FMP_NEWS_{index:03d}"
+    for index, event in enumerate(economic, start=1):
+        event["evidence_id"] = f"FMP_ECON_{index:03d}"
+    if treasury:
+        treasury["evidence_id"] = "FMP_TREASURY_001"
     cited: list[dict[str, Any]] = []
     for category in NEWS_ENDPOINTS:
         cited.extend([item for item in news if item["category"] == category][:2])
@@ -266,12 +272,12 @@ def normalize_cross_market_context(raw: dict[str, Any]) -> dict[str, Any]:
             "may_override_deterministic_outputs": False,
             "statement": "Cross-market context may explain measured conditions but cannot change regime, exposure, portfolio, candidate, or sell-rule actions.",
         },
-        "future_synthesis_boundary": {
-            "status": "NOT_CONFIGURED",
-            "billable_model_used": False,
-            "network_access_allowed": False,
+        "llm_synthesis_boundary": {
+            "status": "PENDING",
+            "network_access_scope": "OPENAI_RESPONSES_API_ONLY",
+            "autonomous_web_or_tool_access": False,
             "allowed_frozen_source_sha256": raw_hash,
-            "instruction": "A future optional model may consume only this frozen source set and deterministic output.",
+            "instruction": "The optional synthesis may consume only this normalized frozen FMP context plus the frozen Dashboard Market Gauge.",
         },
     }
 

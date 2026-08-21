@@ -168,6 +168,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
     breadth = packet.get("market_breadth", {})
     regime = packet.get("market_regime", {})
     cross_market = packet.get("cross_market_context", {})
+    synthesis = cross_market.get("llm_synthesis") or {}
     lines = [
         f"# Daily Market & Portfolio Review - {packet['session_date']}",
         "",
@@ -207,6 +208,36 @@ def render_markdown(packet: dict[str, Any]) -> str:
             "- Interpretation only: this section cannot override regime, exposure, portfolio, candidate, or sell-rule actions.",
         ]
     )
+    if synthesis.get("status") == "AVAILABLE":
+        lines.extend(
+            [
+                "",
+                "### LLM Synthesis of Frozen Sources",
+                f"_OpenAI {synthesis.get('model')}; prompt {synthesis.get('prompt_version')}; generated {synthesis.get('generated_at')}. No web or tool access._",
+            ]
+        )
+        llm_output = synthesis.get("validated_output") or {}
+        for paragraph in llm_output.get("summary_paragraphs") or []:
+            citations = ", ".join(paragraph.get("citation_ids") or [])
+            lines.append(f"{paragraph.get('text')} **[{citations}]**")
+        if llm_output.get("key_themes"):
+            lines.append("")
+            lines.append("Key themes:")
+            for theme in llm_output["key_themes"]:
+                citations = ", ".join(theme.get("citation_ids") or [])
+                lines.append(f"- {theme.get('theme')} **[{citations}]**")
+        for note in llm_output.get("uncertainty_notes") or []:
+            citations = ", ".join(note.get("citation_ids") or [])
+            lines.append(f"- Uncertainty: {note.get('note')} **[{citations}]**")
+    else:
+        lines.extend(
+            [
+                "",
+                "### LLM Synthesis of Frozen Sources",
+                f"- **LLM synthesis unavailable / INSUFFICIENT_EVIDENCE.** {synthesis.get('reason') or 'No validated frozen synthesis was supplied.'}",
+            ]
+        )
+    lines.extend(["", "### Frozen Evidence and Provenance"])
     for article in cross_market.get("cited_context") or []:
         themes = ", ".join(article.get("themes") or []) or "unclassified"
         lines.append(
@@ -364,6 +395,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     breadth = packet.get("market_breadth", {})
     regime = packet.get("market_regime", {})
     cross_market = packet.get("cross_market_context", {})
+    synthesis = cross_market.get("llm_synthesis") or {}
     results = packet.get("sell_rule_results", [])
 
     story.append(_p("Daily Market & Portfolio Review", styles["title"]))
@@ -431,6 +463,28 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         f"Status {cross_market.get('status') or 'INSUFFICIENT_EVIDENCE'} | FMP | {window.get('start_date') or '-'} through {window.get('end_date') or '-'} New York calendar dates. Interpretation only: this context cannot override regime, exposure, portfolio, candidate, or sell-rule actions.",
         styles["body"],
     ))
+    story.append(_p("LLM synthesis of frozen sources", styles["h2"]))
+    if synthesis.get("status") == "AVAILABLE":
+        story.append(_p(
+            f"OpenAI {synthesis.get('model')} | prompt {synthesis.get('prompt_version')} | generated {synthesis.get('generated_at')}. This synthesis used no web or tool access.",
+            styles["small"],
+        ))
+        llm_output = synthesis.get("validated_output") or {}
+        for paragraph in llm_output.get("summary_paragraphs") or []:
+            citations = ", ".join(paragraph.get("citation_ids") or [])
+            story.append(_p(f"{paragraph.get('text')} [{citations}]", styles["body"]))
+        for theme in llm_output.get("key_themes") or []:
+            citations = ", ".join(theme.get("citation_ids") or [])
+            story.append(_p(f"• {theme.get('theme')} [{citations}]", styles["small"]))
+        for note in llm_output.get("uncertainty_notes") or []:
+            citations = ", ".join(note.get("citation_ids") or [])
+            story.append(_p(f"Uncertainty: {note.get('note')} [{citations}]", styles["small"]))
+    else:
+        story.append(_p(
+            f"LLM synthesis unavailable / INSUFFICIENT_EVIDENCE. {synthesis.get('reason') or 'No validated frozen synthesis was supplied.'}",
+            styles["body"],
+        ))
+    story.append(_p("Frozen evidence and provenance", styles["h2"]))
     for article in (cross_market.get("cited_context") or [])[:8]:
         suffix = f" - {article.get('publisher') or 'publisher unavailable'}, {article.get('published_at') or 'time unavailable'} [{str(article.get('category') or '').upper()}]"
         _article_title = str(article.get("title") or "Untitled")

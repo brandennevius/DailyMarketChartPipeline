@@ -79,6 +79,8 @@ jobs:
       DASHBOARD_BASE_URL: ${{ vars.DASHBOARD_BASE_URL }}
       DASHBOARD_WORKER_SECRET: ${{ secrets.DASHBOARD_WORKER_SECRET }}
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MARKET_REVIEW_MODEL: ${{ vars.OPENAI_MARKET_REVIEW_MODEL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

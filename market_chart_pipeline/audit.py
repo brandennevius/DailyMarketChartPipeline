@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from pathlib import Path
 
 from .core import ValidationError
+from .llm_context import SynthesisValidationError, validate_frozen_synthesis
+from .packet import llm_non_influence_record
 from .utils import canonical_json, sha256_file, sha256_text
 
 
@@ -26,6 +29,8 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             "chart_packet_json",
             "chart_packet_pdf",
         }
+        if (packet.get("cross_market_context") or {}).get("raw_inputs"):
+            required_sources.update({"fmp_cross_market_context", "openai_cross_market_synthesis"})
         sources = {item.get("label"): item for item in packet.get("sources", [])}
         missing = sorted(required_sources - set(sources))
         if missing:
@@ -90,6 +95,33 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_sha256": source.get("sha256"),
                 "raw_input_sha256": raw_hash,
                 "context_status": cross_market.get("status"),
+            })
+            synthesis = cross_market.get("llm_synthesis")
+            if not isinstance(synthesis, dict):
+                raise ValidationError("Frozen cross-market LLM synthesis is missing")
+            synthesis_source = sources.get("openai_cross_market_synthesis")
+            synthesis_path = Path(str((synthesis_source or {}).get("path") or ""))
+            if not synthesis_source or synthesis_source.get("status") != "verified" or not synthesis_path.is_file():
+                raise ValidationError("Frozen cross-market LLM synthesis source is unavailable")
+            if sha256_file(synthesis_path) != synthesis_source.get("sha256"):
+                raise ValidationError("Frozen cross-market LLM synthesis source hash mismatch")
+            try:
+                stored_synthesis = json.loads(synthesis_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise ValidationError(f"Frozen cross-market LLM synthesis source is invalid: {exc}") from exc
+            if stored_synthesis != synthesis:
+                raise ValidationError("Packet synthesis does not match its frozen source")
+            try:
+                validate_frozen_synthesis(synthesis, cross_market, packet.get("market_regime") or {})
+            except SynthesisValidationError as exc:
+                raise ValidationError(f"Frozen cross-market LLM synthesis validation failed: {exc}") from exc
+            evidence.append({
+                "gate": "cross_market_llm_synthesis",
+                "status": "pass",
+                "synthesis_status": synthesis.get("status"),
+                "input_sha256": synthesis.get("input_sha256"),
+                "output_sha256": synthesis.get("output_sha256"),
+                "model": synthesis.get("model"),
             })
 
     allowed_origins = {"scanner", "watchlist", "open_position", None}
@@ -158,4 +190,12 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
             if score != item.get("internal_canslim_score"):
                 raise ValidationError(f"Candidate score arithmetic failed for {item.get('ticker')}")
     evidence.append({"gate": "candidate_score_arithmetic", "status": "pass"})
+    expected_non_influence = llm_non_influence_record(packet)
+    if packet.get("llm_non_influence") != expected_non_influence:
+        raise ValidationError("Cross-market LLM non-influence invariant failed")
+    evidence.append({
+        "gate": "llm_non_influence",
+        "status": "pass",
+        "decision_outputs_sha256": expected_non_influence["decision_outputs_sha256"],
+    })
     return evidence

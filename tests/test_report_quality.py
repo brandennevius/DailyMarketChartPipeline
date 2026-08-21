@@ -286,6 +286,23 @@ def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
             "economic_calendar": [{"date": f"{SESSION} 08:30:00", "country": "US", "event": "CPI", "actual": 2.7, "estimate": 2.8, "impact": "High"}],
             "treasury_context": {"date": SESSION, "maturities_pct": {"year2": 4.0, "year10": 4.2, "year30": 4.7}},
             "evidence_gaps": ["crypto: insufficient evidence"],
+            "llm_synthesis": {
+                "status": "AVAILABLE",
+                "model": "gpt-5.4-nano",
+                "prompt_version": "cross_market_synthesis_prompt_v1",
+                "generated_at": "2026-08-14T21:05:00Z",
+                "validated_output": {
+                    "summary_paragraphs": [{
+                        "text": "Frozen rates and index evidence pointed to a mixed cross-market backdrop.",
+                        "citation_ids": ["FMP_TREASURY_001", "GAUGE_INDEX_SPY"],
+                    }],
+                    "key_themes": [{
+                        "theme": "Inflation evidence remained in focus.",
+                        "citation_ids": ["FMP_ECON_001"],
+                    }],
+                    "uncertainty_notes": [],
+                },
+            },
         },
         "portfolio_risk": {"account_value": 100_000, "normalized_long_position_count": 0},
         "sell_rule_results": [],
@@ -302,6 +319,9 @@ def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
     assert "Exposure guidance excludes portfolio feedback" in markdown
     assert "[Treasury yields move after inflation data](https://example.com/rates)" in markdown
     assert "Interpretation only" in markdown
+    assert "LLM Synthesis of Frozen Sources" in markdown
+    assert "mixed cross-market backdrop" in markdown
+    assert "FMP_TREASURY_001, GAUGE_INDEX_SPY" in markdown
 
     from pypdf import PdfReader
 
@@ -311,3 +331,5 @@ def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
     assert "Cross-Market Context" in pdf_text
     assert "O'Neil regime evidence: INSUFFICIENT_EVIDENCE" in pdf_text
     assert "Treasury yields move after inflation data" in pdf_text
+    assert "LLM synthesis of frozen sources" in pdf_text
+    assert "mixed cross-market backdrop" in pdf_text

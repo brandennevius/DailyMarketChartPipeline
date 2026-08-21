@@ -18,6 +18,7 @@ from .cross_market import collect_fmp_cross_market_context
 from .manifest import EQUITY_TICKER_RE, FX_PAIR_RE, TICKER_RE, load_manifest
 from .marketsurge_ocr import EXCLUDED_TOKENS, SECTION_LABELS, extract_pdf_manifest
 from .market_gauge import normalize_dashboard_market_gauge
+from .llm_context import synthesize_cross_market_context
 from .orchestrator import run_daily_review
 from .review_mailer import send_review
 from .utils import atomic_write_text, sha256_file
@@ -421,11 +422,20 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
     cross_market_raw, cross_market_context = collect_fmp_cross_market_context(client.session_date)
     cross_market_path = work_dir / "fmp-cross-market-context.json"
     atomic_write_text(cross_market_path, json.dumps(cross_market_raw, indent=2, sort_keys=True) + "\n")
+    llm_synthesis = synthesize_cross_market_context(
+        client.session_date,
+        cross_market_context,
+        market_data.get("market_regime") or {},
+    )
+    cross_market_context["llm_synthesis"] = llm_synthesis
+    llm_synthesis_path = work_dir / "openai-cross-market-synthesis.json"
+    atomic_write_text(llm_synthesis_path, json.dumps(llm_synthesis, indent=2, sort_keys=True) + "\n")
     market_data["cross_market_context"] = cross_market_context
     market_data.setdefault("source_timestamps", {})["fmp_cross_market_retrieved_at"] = cross_market_context.get("retrieved_at")
+    market_data["source_timestamps"]["openai_cross_market_generated_at"] = llm_synthesis.get("generated_at")
     atomic_write_text(market_data_path, json.dumps(market_data, indent=2, sort_keys=True) + "\n")
     source_manifest = {
-        "schema_version": "daily_review_source_manifest_v3",
+        "schema_version": "daily_review_source_manifest_v4",
         "review_run_id": client.run_id,
         "session_date": client.session_date,
         "sources": [
@@ -434,6 +444,7 @@ def run_dashboard_review(client: DashboardClient, work_dir: Path, output_dir: Pa
             {"label": "marketsurge_scan", "path": str(pdf_path), "sha256": sha256_file(pdf_path), "status": "verified", "page_count": page_count},
             {"label": "market_gauge_json", "path": str(gauge_path), "sha256": sha256_file(gauge_path), "status": "verified"},
             {"label": "fmp_cross_market_context", "path": str(cross_market_path), "sha256": sha256_file(cross_market_path), "status": "verified"},
+            {"label": "openai_cross_market_synthesis", "path": str(llm_synthesis_path), "sha256": sha256_file(llm_synthesis_path), "status": "verified"},
             {"label": "chart_packet_artifact", "path": str(chart_archive), "sha256": sha256_file(chart_archive), "status": "verified"},
         ],
     }

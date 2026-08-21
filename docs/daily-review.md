@@ -212,6 +212,26 @@ temporary sources only after strict registration succeeds. The worker then
 emails the already-generated artifacts and reports `DELIVERY_STATUS` as `SENT`
 or `FAILED`; delivery failure never rebuilds the packet.
 
+## Frozen cross-market synthesis
+
+The optional Cross-Market narrative uses the OpenAI Responses API with strict
+structured JSON. `OPENAI_API_KEY` is a GitHub Actions secret and
+`OPENAI_MARKET_REVIEW_MODEL` is an optional variable (default
+`gpt-5.4-nano`). The request enables neither tools nor response storage. Its
+only input is the canonical completed-session evidence contract built from
+normalized/deduplicated FMP general, stock, forex and crypto news, exact-session
+economic calendar and Treasury records, plus the frozen Dashboard Market Gauge
+and index components. Evidence IDs must resolve to those frozen records.
+
+The validator rejects session mismatch, unknown citations, unsupported numeric
+claims, unsupported ticker-like tokens and malformed output. Failure is
+nonfatal: deterministic context remains in the report and the synthesis is
+marked `INSUFFICIENT_EVIDENCE`. Valid or unavailable synthesis artifacts are
+hashed into the source manifest and canonical packet before Markdown/PDF
+rendering. Frozen packet replay never calls OpenAI again, and the synthesis is
+excluded from all deterministic regime, exposure, breadth, portfolio,
+sell-rule, candidate, shakeout and audit-priority decisions.
+
 Worker API contract:
 
 - `worker-input` requires `Authorization: Bearer $DASHBOARD_WORKER_SECRET` plus

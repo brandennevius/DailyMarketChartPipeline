@@ -5,7 +5,7 @@ import pytest
 from market_chart_pipeline.audit import audit_packet
 from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.orchestrator import run_daily_review
-from market_chart_pipeline.packet import build_review_packet, freeze_packet
+from market_chart_pipeline.packet import build_review_packet, freeze_packet, llm_non_influence_record
 from market_chart_pipeline.policy import load_policy
 from market_chart_pipeline.rules import evaluate_position
 from market_chart_pipeline.utils import sha256_file
@@ -134,8 +134,7 @@ def test_strict_audit_accepts_hpe_hard_exit_with_verified_sandbox(tmp_path):
         path = tmp_path / label
         path.write_text(label, encoding="utf-8")
         sources.append({"label": label, "path": str(path), "sha256": sha256_file(path), "status": "verified"})
-    packet = freeze_packet(
-        {
+    packet_body = {
             "audit_profile": "strict-core",
             "sources": sources,
             "chart_verification": {"status": "verified", "requested_tickers": [], "verified_tickers": []},
@@ -149,7 +148,8 @@ def test_strict_audit_accepts_hpe_hard_exit_with_verified_sandbox(tmp_path):
                 "watchlist_tickers": [],
             },
         }
-    )
+    packet_body["llm_non_influence"] = llm_non_influence_record(packet_body)
+    packet = freeze_packet(packet_body)
 
     evidence = audit_packet(packet)
 
