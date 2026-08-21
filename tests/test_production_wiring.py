@@ -151,7 +151,7 @@ def test_strict_core_run_checks_sources_hashes_and_set_relationships(tmp_path):
     assert sandbox["sha256"]
 
 
-def test_production_shaped_review_preserves_all_watchlist_rows_and_position_pages(tmp_path):
+def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_full_json_coverage(tmp_path):
     tickers = [f"WL{index:02d}" for index in range(1, 16)]
     chart_dir = tmp_path / "chart"
     chart_dir.mkdir()
@@ -161,12 +161,21 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
     manifest_records = {
         "MSFT": {"sources": [{"source_type": "PORTFOLIO", "label": "Current Portfolio"}]}
     }
-    for ticker in tickers:
-        source = {"source_type": "BRANDENS_WATCHLIST", "label": "BRANDENS WATCHLIST", "pdf_page": 8}
+    for index, ticker in enumerate(tickers, start=1):
+        source = {
+            "source_type": "BRANDENS_WATCHLIST" if index % 2 else "STANDARD_MARKETSURGE",
+            "label": "BRANDENS WATCHLIST" if index % 2 else "BREAKING OUT TODAY",
+            "pdf_page": 8 if index % 2 else 3,
+            "rank": index,
+        }
         manifest_records[ticker] = {"sources": [source]}
         records.append({
-            "metrics": {"ticker": ticker, "current_price": 25, "sma21": 24, "sma50": 23, "sma200": 20, "quantitative_gate": "CHART_REVIEW"},
-            "technical_context": {"relative_strength": {"trend_21d": "RISING"}, "volume": {}, "base_analysis": {"pivot_status": "VISUAL_CONFIRMATION_REQUIRED"}},
+            "metrics": {"ticker": ticker, "asset_class": "EQUITY", "current_price": 25 + index / 10, "sma21": 24, "sma50": 23, "sma200": 20, "avg_dollar_volume_50": 30_000_000, "quantitative_gate": "CHART_REVIEW"},
+            "technical_context": {
+                "relative_strength": {"status": "VERIFIED", "trend_21d": "RISING", "change_21d_pct": 1 + index / 10, "new_high_52w": index % 3 == 0},
+                "volume": {"status": "VERIFIED", "up_down_volume_ratio_20": 1.2, "accumulation_distribution_estimate": "POSITIVE"},
+                "base_analysis": {"status": "CANDIDATE_ONLY", "pivot_status": "VISUAL_CONFIRMATION_REQUIRED", "candidate_resistance": 26, "candidate_resistance_distance_pct": -2 + index / 20, "base_length_weeks": 7, "base_depth_pct": 18},
+            },
             "fmp": {},
             "sources": [source],
             "latest_bar_date": SESSION,
@@ -291,14 +300,27 @@ def test_production_shaped_review_preserves_all_watchlist_rows_and_position_page
         source_manifest_path=str(manifest),
         audit_profile="strict-core",
     )
-    watchlist_results = [item for item in result["packet"]["candidate_results"] if item["origin"] == "watchlist"]
-    assert {item["ticker"] for item in watchlist_results} == set(tickers)
+    market_surge_results = [item for item in result["packet"]["candidate_results"] if item["snapshot"]["market_surge_candidate"]]
+    assert {item["ticker"] for item in market_surge_results} == set(tickers)
+    top = result["packet"]["top_canslim_setups"]
+    assert len(top) == 10
+    assert {item["ticker"] for item in top}.issubset(set(tickers))
+    assert {"BRANDENS_WATCHLIST", "STANDARD_MARKETSURGE"}.issubset(
+        {evidence["source_type"] for item in top for evidence in item["snapshot"]["source_evidence"]}
+    )
     gates = result["packet"]["validation_evidence"]
-    assert next(item for item in gates if item["gate"] == "complete_watchlist_render")["ticker_count"] == 15
+    assert next(item for item in gates if item["gate"] == "top_canslim_render")["ticker_count"] == 10
+    assert next(item for item in gates if item["gate"] == "top_canslim_setups")["ranked_tickers"] == [item["ticker"] for item in top]
     assert next(item for item in gates if item["gate"] == "position_sandbox_page")["ticker"] == "MSFT"
     from pypdf import PdfReader
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(result["pdf_path"]).pages)
-    assert all(ticker in text for ticker in tickers)
+    pdf_pages = PdfReader(result["pdf_path"]).pages
+    page_text = [page.extract_text() or "" for page in pdf_pages]
+    text = "\n".join(page_text)
+    assert len([value for value in page_text if "Top 10 CANSLIM Setups" in value]) == 2
+    assert all(item["ticker"] in text for item in top)
+    assert "Brandens Watchlist - Complete Results" not in text
+    assert "Visual Review Queue" not in text
+    assert "First Charts to Review" not in text
     assert "VERIFIED SELL-RULE SANDBOX - MSFT" in text
     assert "Dashboard Gauge posture: Neutral" in text
     assert "Cross-Market Context" in text

@@ -103,6 +103,45 @@ Add `--portfolio`, `--candidates`, `--shakeouts`, and `--market-data` when those
 
 Tunable thresholds live in `config/trading_policy.json` and include max initial loss, 2 ATR stop policy, rapid advance, profit zone, peak drawdown, patience, portfolio risk, candidate scoring, and shakeout/re-entry thresholds.
 
+### Global Top 10 CANSLIM setup ranking
+
+Policy `2026.08.20.1` / calculation `daily-review-v4-top10-canslim` replaces the
+report-facing complete-watchlist, visual-review-queue and first-charts lists
+with one deterministic global ranking. The source universe is every distinct
+validated equity ticker in the entire frozen MarketSurge PDF manifest. List
+membership such as `BRANDENS WATCHLIST` is retained as provenance but grants no
+score preference. Current open positions remain in sell-sandbox analysis and
+are excluded from new-entry ranking; FX, malformed tokens, duplicate tickers
+and non-MarketSurge names are also ineligible. News and LLM narrative are not
+candidate sources or ranking inputs.
+
+The five score components are weighted 30% sourced C/A fundamentals, 25%
+relative strength plus available group evidence, 30% technical setup/trend,
+10% supply/demand, and 5% new-high or defensible resistance proximity. Missing
+inputs contribute zero and reduce confidence. Current FMP data does not supply
+a true industry-group rank, institutional sponsorship, estimates/revisions, or
+a fully validated O'Neil base/pivot, so those gaps remain explicit. The frozen
+Market Gauge is an action gate/context input and adds no ranking points.
+
+`BUY NOW` requires a verified prior uptrend, base type/duration/depth/stage,
+handle quality where applicable, weekly structure, volume contraction, exact
+pivot, buy-zone status, breakout-volume confirmation, minimum
+fundamental/RS/technical evidence, sourced top-40 industry-group leadership,
+institutional support, a verified earnings date at least five days away, and
+buying-permissive market evidence. `EARLY ENTRY` has an equivalent verified
+structural and early-entry gate. An
+algorithmic resistance level is never promoted to a verified pivot. Otherwise
+the deterministic vocabulary is `WATCH NEAR PIVOT`, `WATCH / BUILDING`, `WAIT
+FOR CONFIRMATION`, `AVOID`, or `INSUFFICIENT EVIDENCE`. Ordering is score,
+technical component, RS/group component, then ticker; the printed list is
+capped at ten and may be shorter when evidence is inadequate.
+
+Canonical JSON retains `candidate_results`, `candidate_universe_audit`, and
+`top_canslim_setups`, including every classification, rejection reason, source
+page/list/rank, score component, missing field, trigger, and invalidation. The
+audit independently reconstructs the eligible order, checks set relationships,
+and hashes the candidate outputs into the LLM non-influence invariant.
+
 The transcript-derived sell hierarchy is deterministic:
 
 1. Hard capital protection uses the tighter of the purchase-price loss limit,
@@ -230,7 +269,8 @@ marked `INSUFFICIENT_EVIDENCE`. Valid or unavailable synthesis artifacts are
 hashed into the source manifest and canonical packet before Markdown/PDF
 rendering. Frozen packet replay never calls OpenAI again, and the synthesis is
 excluded from all deterministic regime, exposure, breadth, portfolio,
-sell-rule, candidate, shakeout and audit-priority decisions.
+sell-rule, candidate, Top-10 ranking, candidate-universe audit, shakeout and
+audit-priority decisions.
 
 Worker API contract:
 

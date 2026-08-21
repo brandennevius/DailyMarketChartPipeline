@@ -1,7 +1,8 @@
 {
-  "policy_version": "2026.08.16.1",
-  "calculation_version": "daily-review-v3",
+  "policy_version": "2026.08.20.1",
+  "calculation_version": "daily-review-v4-top10-canslim",
   "actions": ["HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"],
+  "candidate_actions": ["BUY NOW", "EARLY ENTRY", "WATCH NEAR PIVOT", "WATCH / BUILDING", "WAIT FOR CONFIRMATION", "AVOID", "INSUFFICIENT EVIDENCE", "EXCLUDED - OPEN POSITION", "EXCLUDED - NON-EQUITY"],
   "hard_rules": {
     "max_initial_loss_pct": 8.0,
     "atr_stop_multiple": 2.0,
@@ -46,6 +47,23 @@
     "technical_setup": 0.30,
     "accumulation_supply": 0.10,
     "new_catalyst": 0.05
+  },
+  "candidate_ranking": {
+    "schema_version": "canslim_setup_ranking_v1",
+    "maximum_ranked_setups": 10,
+    "minimum_available_dimensions": 3,
+    "near_resistance_lower_pct": -5.0,
+    "near_resistance_upper_pct": 2.0,
+    "minimum_average_dollar_volume": 20000000,
+    "buy_zone_upper_pct": 5.0,
+    "minimum_breakout_relative_volume": 1.5,
+    "minimum_fundamental_score_for_action": 70.0,
+    "minimum_rs_group_score_for_action": 65.0,
+    "minimum_technical_score_for_action": 70.0,
+    "maximum_industry_group_rank_for_action": 40,
+    "minimum_days_to_earnings_for_action": 5,
+    "buying_permissive_internal_regimes": ["Confirmed uptrend"],
+    "buying_permissive_dashboard_postures": ["Grow"]
   },
   "exposure_bands": {
     "Defensive": "0%-20%",

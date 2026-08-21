@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 from .core import ValidationError
 from .llm_context import SynthesisValidationError, validate_frozen_synthesis
 from .packet import llm_non_influence_record
+from .rules import (
+    CANDIDATE_ACTION_AVOID,
+    CANDIDATE_ACTION_BUILDING,
+    CANDIDATE_ACTION_BUY,
+    CANDIDATE_ACTION_EARLY,
+    CANDIDATE_ACTION_INSUFFICIENT,
+    CANDIDATE_ACTION_NEAR,
+    CANDIDATE_ACTION_NON_EQUITY,
+    CANDIDATE_ACTION_OPEN_POSITION,
+    CANDIDATE_ACTION_WAIT,
+)
 from .utils import canonical_json, sha256_file, sha256_text
 
 
@@ -130,10 +141,22 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
         raise ValidationError(f"Candidate origin audit failed: {bad_origins}")
     evidence.append({"gate": "candidate_origins", "status": "pass"})
 
-    allowed_actions = {"HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"}
+    deterministic_actions = {"HOLD", "ADD", "REDUCE", "EXIT", "REPAIR", "INSUFFICIENT_EVIDENCE"}
+    candidate_actions = {
+        CANDIDATE_ACTION_BUY,
+        CANDIDATE_ACTION_EARLY,
+        CANDIDATE_ACTION_NEAR,
+        CANDIDATE_ACTION_BUILDING,
+        CANDIDATE_ACTION_WAIT,
+        CANDIDATE_ACTION_AVOID,
+        CANDIDATE_ACTION_INSUFFICIENT,
+        CANDIDATE_ACTION_OPEN_POSITION,
+        CANDIDATE_ACTION_NON_EQUITY,
+    }
     action_sections = ["sell_rule_results", "candidate_results", "shakeout_results"]
     bad_actions: list[dict[str, Any]] = []
     for section in action_sections:
+        allowed_actions = candidate_actions if section == "candidate_results" else deterministic_actions
         for item in packet.get(section, []):
             if item.get("action") not in allowed_actions:
                 bad_actions.append({"section": section, "item": item})
@@ -148,8 +171,34 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
     evidence.append({"gate": "explicit_rule_events", "status": "pass"})
 
     for item in packet.get("candidate_results", []):
-        if item.get("classification") in {"BUY_NOW", "EARLY_ENTRY"} and item.get("action") != "ADD":
-            raise ValidationError(f"Actionable candidate is not mapped to ADD: {item.get('ticker')}")
+        expected = {"BUY_NOW": CANDIDATE_ACTION_BUY, "EARLY_ENTRY": CANDIDATE_ACTION_EARLY}.get(
+            item.get("classification")
+        )
+        if expected and item.get("action") != expected:
+            raise ValidationError(f"Actionable candidate has an invalid action mapping: {item.get('ticker')}")
+        if item.get("action") == CANDIDATE_ACTION_BUY:
+            snapshot = item.get("snapshot") or {}
+            required = {
+                "pivot_verification_status": snapshot.get("pivot_verification_status"),
+                "pivot_structure_verification_status": snapshot.get("pivot_structure_verification_status"),
+                "exact_pivot_price": snapshot.get("exact_pivot_price"),
+                "breakout_volume_confirmation": snapshot.get("breakout_volume_confirmation"),
+            }
+            if (
+                required["pivot_verification_status"] != "verified"
+                or required["pivot_structure_verification_status"] != "VERIFIED"
+                or required["exact_pivot_price"] is None
+                or required["breakout_volume_confirmation"] is not True
+            ):
+                raise ValidationError(f"BUY NOW candidate lacks a fully verified pivot/breakout: {item.get('ticker')}")
+        if item.get("action") == CANDIDATE_ACTION_EARLY:
+            snapshot = item.get("snapshot") or {}
+            if (
+                snapshot.get("early_entry_verification_status") != "verified"
+                or snapshot.get("pivot_structure_verification_status") != "VERIFIED"
+                or snapshot.get("breakout_volume_confirmation") is not True
+            ):
+                raise ValidationError(f"EARLY ENTRY candidate lacks verified structural/volume safeguards: {item.get('ticker')}")
     actionable = {
         item.get("ticker")
         for item in packet.get("candidate_results", [])
@@ -175,12 +224,65 @@ def audit_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
     watchlist_results = {
         str(item.get("ticker", "")).upper()
         for item in packet.get("candidate_results", [])
-        if item.get("origin") == "watchlist"
+        if "BRANDENS_WATCHLIST" in set((item.get("snapshot") or {}).get("origin_categories") or [])
     }
     if watchlist_tickers != watchlist_results:
         raise ValidationError("Watchlist/result set relationship failed")
     evidence.append({"gate": "set_relationships", "status": "pass"})
     evidence.append({"gate": "complete_watchlist_results", "status": "pass", "ticker_count": len(watchlist_tickers)})
+
+    universe = packet.get("candidate_universe_audit") or {}
+    top_setups = packet.get("top_canslim_setups") or []
+    if packet.get("candidate_results") and universe.get("schema_version") != "marketsurge_candidate_universe_audit_v1":
+        raise ValidationError("MarketSurge candidate-universe audit is missing")
+    ranked_limit = int(universe.get("ranking_limit") or 10)
+    if len(top_setups) > ranked_limit or len(top_setups) > 10:
+        raise ValidationError("Top CANSLIM setup ranking exceeds its configured limit")
+    valid_manifest = set(universe.get("valid_manifest_equity_tickers") or [])
+    ranked_tickers = [str(item.get("ticker") or "").upper() for item in top_setups]
+    if len(ranked_tickers) != len(set(ranked_tickers)):
+        raise ValidationError("Top CANSLIM setup ranking contains duplicate tickers")
+    if set(ranked_tickers) - valid_manifest:
+        raise ValidationError("Top CANSLIM setup ranking contains a ticker outside the valid MarketSurge equities")
+    if set(ranked_tickers) & portfolio_tickers:
+        raise ValidationError("Top CANSLIM setup ranking contains a current portfolio position")
+    eligible = [
+        item
+        for item in packet.get("candidate_results", [])
+        if (item.get("ranking_eligibility") or {}).get("status") == "ELIGIBLE"
+    ]
+    eligible.sort(
+        key=lambda item: (
+            -float(item.get("internal_canslim_score") or 0),
+            -float((item.get("score_components") or {}).get("technical_setup") or 0),
+            -float((item.get("score_components") or {}).get("relative_strength_group") or 0),
+            str(item.get("ticker") or ""),
+        )
+    )
+    expected_tickers = [str(item.get("ticker") or "").upper() for item in eligible[:ranked_limit]]
+    if ranked_tickers != expected_tickers:
+        raise ValidationError("Top CANSLIM setup order is not reproducible from the frozen candidate results")
+    for expected_rank, item in enumerate(top_setups, start=1):
+        if item.get("rank") != expected_rank:
+            raise ValidationError("Top CANSLIM setup ranks are not contiguous")
+        if not item.get("why_ranked") or not item.get("trigger") or not item.get("risk_invalidates"):
+            raise ValidationError(f"Top CANSLIM setup lacks decision-useful evidence: {item.get('ticker')}")
+        if not (item.get("snapshot") or {}).get("source_evidence"):
+            raise ValidationError(f"Top CANSLIM setup lacks MarketSurge provenance: {item.get('ticker')}")
+    if universe:
+        if universe.get("ranked_top10_tickers") != ranked_tickers:
+            raise ValidationError("Candidate-universe audit does not match Top CANSLIM setup ranking")
+        if universe.get("news_candidate_admission") is not False or universe.get("llm_ranking_influence") is not False:
+            raise ValidationError("News or LLM influence was admitted into candidate ranking")
+        if universe.get("malformed_ocr_tokens_admitted") != 0:
+            raise ValidationError("Malformed OCR tokens were admitted into candidate ranking")
+    evidence.append({
+        "gate": "top_canslim_setups",
+        "status": "pass",
+        "ranked_tickers": ranked_tickers,
+        "ranking_limit": ranked_limit,
+    })
+    evidence.append({"gate": "news_llm_candidate_non_influence", "status": "pass"})
 
     for item in packet.get("candidate_results", []):
         components = item.get("score_components") or {}

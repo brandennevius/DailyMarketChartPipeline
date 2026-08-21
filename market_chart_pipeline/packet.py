@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .rules import evaluate_position, evaluate_shakeout, score_candidate
+from .manifest import EQUITY_TICKER_RE, FX_PAIR_RE
+from .rules import evaluate_position, evaluate_shakeout, rank_top_canslim_setups, score_candidate
 from .utils import canonical_json, sha256_file, sha256_text
 
 
@@ -16,6 +17,8 @@ LLM_NON_INFLUENCE_FIELDS = (
     "portfolio_risk",
     "sell_rule_results",
     "candidate_results",
+    "top_canslim_setups",
+    "candidate_universe_audit",
     "shakeout_results",
 )
 
@@ -108,6 +111,76 @@ def _verify_chart_packet(chart_json: Path | None, chart_pdf: Path | None, sessio
     return result
 
 
+def _candidate_universe_audit(
+    candidate_results: list[dict[str, Any]], top_setups: list[dict[str, Any]], policy: dict[str, Any]
+) -> dict[str, Any]:
+    flagged_manifest = [
+        item for item in candidate_results if (item.get("snapshot") or {}).get("market_surge_candidate") is True
+    ]
+    malformed = [
+        item
+        for item in flagged_manifest
+        if not (
+            EQUITY_TICKER_RE.fullmatch(str(item.get("ticker") or ""))
+            or FX_PAIR_RE.fullmatch(str(item.get("ticker") or ""))
+        )
+    ]
+    malformed_tickers = {str(item.get("ticker") or "") for item in malformed}
+    manifest = [item for item in flagged_manifest if item not in malformed]
+    valid_equities = [
+        item for item in manifest if (item.get("snapshot") or {}).get("asset_class") == "EQUITY"
+    ]
+    open_exclusions = [
+        item for item in valid_equities if (item.get("snapshot") or {}).get("is_current_open_position") is True
+    ]
+    non_equities = [
+        item for item in manifest if (item.get("snapshot") or {}).get("asset_class") != "EQUITY"
+    ]
+    rejected = [
+        {
+            "ticker": item.get("ticker"),
+            "reasons": (item.get("ranking_eligibility") or {}).get("rejection_reasons") or [],
+            "classification": item.get("classification"),
+            "action": item.get("action"),
+            "source_evidence": (item.get("snapshot") or {}).get("source_evidence") or [],
+        }
+        for item in manifest
+        if (item.get("ranking_eligibility") or {}).get("status") == "REJECTED"
+    ]
+    eligible = [
+        item for item in manifest if (item.get("ranking_eligibility") or {}).get("status") == "ELIGIBLE"
+    ]
+    return {
+        "schema_version": "marketsurge_candidate_universe_audit_v1",
+        "source": "FROZEN_MARKETSURGE_PDF_MANIFEST",
+        "selection_rule": "Every distinct validated MarketSurge equity ticker; exclude current open positions and non-equities, then require minimum evidence.",
+        "ranking_rule": "Internal CANSLIM score descending, technical component descending, RS/group component descending, ticker ascending.",
+        "ranking_limit": int((policy.get("candidate_ranking") or {}).get("maximum_ranked_setups", 10)),
+        "distinct_manifest_ticker_count": len(manifest),
+        "distinct_manifest_tickers": sorted(str(item.get("ticker")) for item in manifest),
+        "valid_manifest_equity_count": len(valid_equities),
+        "valid_manifest_equity_tickers": sorted(str(item.get("ticker")) for item in valid_equities),
+        "open_position_exclusion_count": len(open_exclusions),
+        "open_position_exclusions": sorted(str(item.get("ticker")) for item in open_exclusions),
+        "non_equity_exclusion_count": len(non_equities),
+        "non_equity_exclusions": sorted(str(item.get("ticker")) for item in non_equities),
+        "malformed_ocr_exclusion_count": len(malformed),
+        "malformed_ocr_exclusions": sorted(str(item.get("ticker")) for item in malformed),
+        "adequately_evidenced_count": len(eligible),
+        "adequately_evidenced_tickers": sorted(str(item.get("ticker")) for item in eligible),
+        "ranked_count": len(top_setups),
+        "ranked_top10_tickers": [str(item.get("ticker")) for item in top_setups],
+        "rejected": sorted(rejected, key=lambda item: str(item.get("ticker") or "")),
+        "malformed_ocr_tokens_admitted": sum(
+            1 for item in top_setups if str(item.get("ticker") or "") in malformed_tickers
+        ),
+        "dedupe_key": "normalized_ticker",
+        "news_candidate_admission": False,
+        "llm_ranking_influence": False,
+        "full_results_location": "candidate_results",
+    }
+
+
 def build_review_packet(
     *,
     requested_date: str,
@@ -130,10 +203,20 @@ def build_review_packet(
     chart_json = chart_packet_dir / f"Market_Chart_Data_{session_date}.json" if chart_packet_dir else None
     chart_pdf = chart_packet_dir / f"Market_Chart_Packet_{session_date}.pdf" if chart_packet_dir else None
     position_results = [evaluate_position(position, policy, session_date) for position in portfolio]
+    market_regime = market_data.get(
+        "market_regime",
+        {
+            "classification": "INSUFFICIENT_EVIDENCE",
+            "confidence": "low",
+            "evidence": ["No deterministic market-regime input was supplied."],
+        },
+    )
     candidate_results = sorted(
-        [score_candidate(candidate, policy) for candidate in candidates],
+        [score_candidate(candidate, policy, market_regime) for candidate in candidates],
         key=lambda item: (-item["internal_canslim_score"], item["ticker"]),
     )
+    top_canslim_setups = rank_top_canslim_setups(candidate_results, policy)
+    candidate_universe_audit = _candidate_universe_audit(candidate_results, top_canslim_setups, policy)
     shakeout_results = [evaluate_shakeout(record, policy) for record in shakeouts]
     source_records = list((source_manifest or {}).get("sources") or [])
     source_records.extend(
@@ -143,7 +226,7 @@ def build_review_packet(
         ]
     )
     packet = {
-        "schema_version": "daily_review_packet_v1",
+        "schema_version": "daily_review_packet_v2",
         "audit_profile": audit_profile,
         "requested_date": requested_date,
         "session_date": session_date,
@@ -153,14 +236,7 @@ def build_review_packet(
         "source_timestamps": market_data.get("source_timestamps", {}),
         "sources": source_records,
         "manifests": market_data.get("manifests", []),
-        "market_regime": market_data.get(
-            "market_regime",
-            {
-                "classification": "INSUFFICIENT_EVIDENCE",
-                "confidence": "low",
-                "evidence": ["No deterministic market-regime input was supplied."],
-            },
-        ),
+        "market_regime": market_regime,
         "exposure_guidance": market_data.get(
             "exposure_guidance",
             {
@@ -191,6 +267,8 @@ def build_review_packet(
         },
         "sell_rule_results": position_results,
         "candidate_results": candidate_results,
+        "top_canslim_setups": top_canslim_setups,
+        "candidate_universe_audit": candidate_universe_audit,
         "shakeout_results": shakeout_results,
         "chart_verification": _verify_chart_packet(chart_json, chart_pdf, session_date),
         "input_sets": {
@@ -199,8 +277,11 @@ def build_review_packet(
             "watchlist_tickers": sorted(
                 str(item.get("ticker", "")).upper()
                 for item in candidates
-                if item.get("ticker") and item.get("origin") == "watchlist"
+                if item.get("ticker") and "BRANDENS_WATCHLIST" in set(item.get("origin_categories") or [])
             ),
+            "market_surge_manifest_tickers": candidate_universe_audit["distinct_manifest_tickers"],
+            "valid_manifest_equity_tickers": candidate_universe_audit["valid_manifest_equity_tickers"],
+            "ranked_top10_tickers": candidate_universe_audit["ranked_top10_tickers"],
         },
         "validation_evidence": [],
     }

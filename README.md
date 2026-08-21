@@ -75,8 +75,11 @@ The quantitative gate is a ranking/rejection aid only. It never declares a stock
 See [docs/daily-review.md](docs/daily-review.md) for the versioned policy,
 strict source/audit path, local command, and exact workflow replay command.
 The review PDF is decision-first: portfolio exposure and risk, an action board,
-per-position stop/target context with current charts, a non-actionable visual
-review queue, selected candidate charts, and a compact evidence appendix.
+per-position stop/target context with current charts, a global `Top 10 CANSLIM
+Setups` ranking from every distinct valid equity in the frozen MarketSurge PDF,
+and a compact evidence appendix. Full candidate classifications, exclusions,
+provenance and score components remain in canonical JSON instead of being
+printed as duplicate watchlist/review-queue sections.
 Each open equity position also receives a hash-locked sell-rule sandbox chart
 that overlays the configured percentage, ATR, trailing, profit-zone, and time
 boundaries on current-session candles.
@@ -87,5 +90,5 @@ the completed session, with Responses API tools disabled and storage disabled.
 Its strict JSON result, citations, request/input/output hashes, model and schema
 versions are frozen before report rendering. Packet replay renders that stored
 result without another model call. A separate hash invariant excludes this
-narrative from regime, exposure, breadth, portfolio, sell-rule, candidate and
-shakeout decisions.
+narrative from regime, exposure, breadth, portfolio, sell-rule, candidate,
+Top-10 ranking, candidate-universe audit and shakeout decisions.

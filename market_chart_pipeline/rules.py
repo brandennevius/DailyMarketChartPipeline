@@ -3,12 +3,24 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from .manifest import EQUITY_TICKER_RE, FX_PAIR_RE
+
 ACTION_HOLD = "HOLD"
 ACTION_ADD = "ADD"
 ACTION_REDUCE = "REDUCE"
 ACTION_EXIT = "EXIT"
 ACTION_REPAIR = "REPAIR"
 ACTION_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
+
+CANDIDATE_ACTION_BUY = "BUY NOW"
+CANDIDATE_ACTION_EARLY = "EARLY ENTRY"
+CANDIDATE_ACTION_NEAR = "WATCH NEAR PIVOT"
+CANDIDATE_ACTION_BUILDING = "WATCH / BUILDING"
+CANDIDATE_ACTION_WAIT = "WAIT FOR CONFIRMATION"
+CANDIDATE_ACTION_AVOID = "AVOID"
+CANDIDATE_ACTION_INSUFFICIENT = "INSUFFICIENT EVIDENCE"
+CANDIDATE_ACTION_OPEN_POSITION = "EXCLUDED - OPEN POSITION"
+CANDIDATE_ACTION_NON_EQUITY = "EXCLUDED - NON-EQUITY"
 
 _POSITION_SNAPSHOT_FIELDS = (
     "company_name", "sector", "entry_price", "entry_date", "current_price", "shares",
@@ -349,8 +361,98 @@ def evaluate_shakeout(record: dict[str, Any], policy: dict[str, Any]) -> dict[st
     return {"ticker": ticker, "state": "WATCH", "action": ACTION_HOLD, "rationale": "The reclaim requirements are not yet satisfied.", "events": events}
 
 
-def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+def _candidate_market_permission(market_regime: dict[str, Any], ranking: dict[str, Any]) -> dict[str, Any]:
+    classification = market_regime.get("classification")
+    posture = market_regime.get("dashboard_market_gauge_posture")
+    permitted = (
+        classification in set(ranking.get("buying_permissive_internal_regimes") or [])
+        and posture in set(ranking.get("buying_permissive_dashboard_postures") or [])
+    )
+    status = "PERMITTED" if permitted else "INSUFFICIENT_EVIDENCE" if classification == "INSUFFICIENT_EVIDENCE" else "NOT_PERMITTED"
+    return {
+        "status": status,
+        "internal_regime": classification,
+        "dashboard_market_gauge_posture": posture,
+        "reason": (
+            "Internal regime and frozen Dashboard Gauge are buying-permissive."
+            if permitted
+            else "A buying-permissive internal regime plus Grow Dashboard Gauge posture is not verified."
+        ),
+    }
+
+
+def _candidate_confidence(candidate: dict[str, Any]) -> str:
+    available = len(candidate.get("available_dimensions") or [])
+    critical_missing = {
+        "prior_three_quarter_eps_sales_growth",
+        "estimates_and_revisions",
+        "industry_group_rank",
+        "institutional_sponsorship",
+        "exact_pivot_price",
+        "base_duration",
+        "base_depth",
+        "base_stage",
+        "breakout_volume_confirmation",
+    }
+    missing = set(candidate.get("missing_evidence") or []) | set(candidate.get("pivot_missing_evidence") or [])
+    if available >= 5 and not (missing & critical_missing):
+        return "HIGH"
+    if available >= 4 and len(missing & critical_missing) <= 2:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _candidate_trigger(candidate: dict[str, Any], action: str, ranking: dict[str, Any]) -> str:
+    if action == CANDIDATE_ACTION_BUY and candidate.get("exact_pivot_price") is not None:
+        return (
+            f"Verified breakout through {float(candidate['exact_pivot_price']):.2f} with relative volume "
+            f">= {float(ranking['minimum_breakout_relative_volume']):.2f}x."
+        )
+    if action == CANDIDATE_ACTION_EARLY and candidate.get("early_entry_price") is not None:
+        return f"Verified early-entry trigger through {float(candidate['early_entry_price']):.2f} with confirmed volume."
+    resistance = candidate.get("candidate_resistance")
+    if resistance is not None:
+        return (
+            f"Visually verify a proper base and exact pivot near {float(resistance):.2f}; then require a valid breakout "
+            f"with relative volume >= {float(ranking['minimum_breakout_relative_volume']):.2f}x."
+        )
+    return "No verified entry trigger; establish a proper base, exact pivot, and confirming volume first."
+
+
+def _candidate_risk(candidate: dict[str, Any]) -> str:
+    parts = []
+    if candidate.get("sma50") is not None:
+        parts.append(f"technical deterioration below 50-day {float(candidate['sma50']):.2f}")
+    if candidate.get("sma200") is not None:
+        parts.append(f"major trend failure below 200-day {float(candidate['sma200']):.2f}")
+    if candidate.get("earnings_date"):
+        parts.append(f"earnings risk {candidate['earnings_date']}")
+    if candidate.get("pivot_verification_status") != "verified":
+        parts.append("no exact setup invalidation until the pivot/base is verified")
+    return "; ".join(parts) or "Exact risk/invalidation is insufficient evidence."
+
+
+def _why_ranked(components: dict[str, float], candidate: dict[str, Any]) -> str:
+    labels = {
+        "fundamental_quality": "C/A fundamentals",
+        "relative_strength_group": "RS/group",
+        "technical_setup": "technical setup",
+        "accumulation_supply": "supply/demand",
+        "new_catalyst": "new/proximity",
+    }
+    leaders = sorted(components, key=lambda key: (-components[key], key))[:3]
+    evidence = ", ".join(f"{labels[key]} {components[key]:.0f}/100" for key in leaders)
+    gate = candidate.get("quantitative_gate") or "gate unavailable"
+    return f"Highest sourced components: {evidence}; technical screen {gate}."
+
+
+def score_candidate(
+    candidate: dict[str, Any],
+    policy: dict[str, Any],
+    market_regime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     weights = policy["candidate_scoring"]
+    ranking = policy.get("candidate_ranking") or {}
     components = {
         "fundamental_quality": float(candidate.get("fundamental_quality_score") or 0),
         "relative_strength_group": float(candidate.get("relative_strength_group_score") or 0),
@@ -360,31 +462,160 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
     }
     total = sum(max(0.0, min(100.0, components[key])) * float(weight) for key, weight in weights.items())
     critical = [field for field in ["origin", "ticker", "pivot_verification_status"] if not candidate.get(field)]
-    classification = "WATCH"
-    action = ACTION_HOLD
-    rationale = "Candidate is tracked but not actionable."
+    market_permission = _candidate_market_permission(market_regime or {}, ranking)
+    missing = sorted(set(candidate.get("missing_evidence") or []) | set(candidate.get("pivot_missing_evidence") or []))
+    if market_permission["status"] != "PERMITTED":
+        missing.append("buying_permissive_market_regime")
+    missing = sorted(set(missing))
+    classification = "WAIT_FOR_CONFIRMATION"
+    action = CANDIDATE_ACTION_WAIT
+    rationale = "Setup evidence is incomplete; wait for a verified entry and confirming evidence."
+    rejection_reasons: list[str] = []
+    available_count = len(candidate.get("available_dimensions") or [])
+    ranking_eligible = True
     if candidate.get("origin") not in {"scanner", "watchlist", "open_position"}:
         classification = "AVOID"
-        action = ACTION_INSUFFICIENT
+        action = CANDIDATE_ACTION_AVOID
         rationale = "Candidate origin is not allowed by policy."
+        rejection_reasons.append("DISALLOWED_ORIGIN")
+        ranking_eligible = False
     elif critical:
-        classification = "AVOID"
-        action = ACTION_INSUFFICIENT
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
         rationale = f"Missing critical candidate fields: {', '.join(critical)}"
-    elif candidate.get("pivot_verification_status") != "verified":
-        classification = "WATCH"
-        missing_pivot = candidate.get("pivot_missing_evidence") or []
-        rationale = "Pivot is not verified, so no actionable entry is allowed."
-        if missing_pivot:
-            rationale += f" Missing pivot proof: {', '.join(missing_pivot)}."
-    elif candidate.get("inside_buy_zone") is True and total >= 75:
+        rejection_reasons.append("MISSING_CRITICAL_FIELDS")
+        ranking_eligible = False
+    elif not (
+        (candidate.get("asset_class") == "EQUITY" and EQUITY_TICKER_RE.fullmatch(str(candidate.get("ticker") or "")))
+        or (candidate.get("asset_class") == "FOREX" and FX_PAIR_RE.fullmatch(str(candidate.get("ticker") or "")))
+    ):
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Ticker does not satisfy the validated equity or strict AAA/BBB identifier policy."
+        rejection_reasons.append("MALFORMED_TICKER")
+        ranking_eligible = False
+    elif candidate.get("is_current_open_position") is True:
+        classification = "PORTFOLIO_POSITION"
+        action = CANDIDATE_ACTION_OPEN_POSITION
+        rationale = "Current open positions are excluded from new-entry ranking and remain in sell-sandbox analysis."
+        rejection_reasons.append("CURRENT_OPEN_POSITION")
+        ranking_eligible = False
+    elif candidate.get("market_surge_candidate") is not True:
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Ticker did not originate from a validated MarketSurge PDF row."
+        rejection_reasons.append("NOT_IN_MARKETSURGE_MANIFEST")
+        ranking_eligible = False
+    elif candidate.get("asset_class") != "EQUITY":
+        classification = "NON_EQUITY"
+        action = CANDIDATE_ACTION_NON_EQUITY
+        rationale = "Only valid equity securities are eligible for the CANSLIM setup ranking."
+        rejection_reasons.append("NON_EQUITY_INSTRUMENT")
+        ranking_eligible = False
+    elif candidate.get("chart_evidence_status") != "VERIFIED":
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Exact-session chart and technical evidence are unavailable."
+        rejection_reasons.append("CURRENT_SESSION_CHART_UNAVAILABLE")
+        ranking_eligible = False
+    elif available_count < int(ranking.get("minimum_available_dimensions", 3)):
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Too few sourced CANSLIM/setup dimensions are available for ranking."
+        rejection_reasons.append("MINIMUM_EVIDENCE_NOT_MET")
+        ranking_eligible = False
+    elif candidate.get("average_dollar_volume") is None:
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Average daily dollar-volume evidence is unavailable."
+        rejection_reasons.append("LIQUIDITY_UNAVAILABLE")
+        ranking_eligible = False
+    elif any(candidate.get(field) is None for field in ["current_price", "sma50", "sma200"]):
+        classification = "INSUFFICIENT_EVIDENCE"
+        action = CANDIDATE_ACTION_INSUFFICIENT
+        rationale = "Current price and 50/200-day trend-alignment evidence are required for ranking."
+        rejection_reasons.append("LONG_TERM_TREND_UNAVAILABLE")
+        ranking_eligible = False
+    elif (
+        float(candidate["average_dollar_volume"]) < float(ranking.get("minimum_average_dollar_volume", 20_000_000))
+    ) or (
+        candidate.get("current_price") is not None
+        and candidate.get("sma200") is not None
+        and float(candidate["current_price"]) < float(candidate["sma200"])
+    ):
+        classification = "AVOID"
+        action = CANDIDATE_ACTION_AVOID
+        rationale = "Liquidity or long-term trend evidence fails the ranking policy."
+        rejection_reasons.append("LIQUIDITY_OR_LONG_TERM_TREND_FAILURE")
+        ranking_eligible = False
+    elif (
+        candidate.get("pivot_verification_status") == "verified"
+        and candidate.get("pivot_structure_verification_status") == "VERIFIED"
+        and candidate.get("exact_pivot_price") is not None
+        and candidate.get("inside_buy_zone") is True
+        and candidate.get("breakout_volume_confirmation") is True
+        and candidate.get("relative_volume") is not None
+        and float(candidate["relative_volume"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
+        and components["fundamental_quality"] >= float(ranking.get("minimum_fundamental_score_for_action", 70))
+        and components["relative_strength_group"] >= float(ranking.get("minimum_rs_group_score_for_action", 65))
+        and components["technical_setup"] >= float(ranking.get("minimum_technical_score_for_action", 70))
+        and candidate.get("industry_group_rank") is not None
+        and int(candidate["industry_group_rank"]) <= int(ranking.get("maximum_industry_group_rank_for_action", 40))
+        and candidate.get("institutional_sponsorship_status") == "VERIFIED_SUPPORTIVE"
+        and candidate.get("earnings_status") == "VERIFIED"
+        and candidate.get("days_to_earnings") is not None
+        and int(candidate["days_to_earnings"]) >= int(ranking.get("minimum_days_to_earnings_for_action", 5))
+        and market_permission["status"] == "PERMITTED"
+    ):
         classification = "BUY_NOW"
-        action = ACTION_ADD
-        rationale = "Verified pivot, buy-zone location, and deterministic score pass."
+        action = CANDIDATE_ACTION_BUY
+        rationale = "All verified pivot, buy-zone, volume, C/A, leadership, sponsorship, earnings-risk and market-permission gates pass."
+    elif (
+        candidate.get("early_entry_verification_status") == "verified"
+        and candidate.get("pivot_structure_verification_status") == "VERIFIED"
+        and candidate.get("early_entry_price") is not None
+        and candidate.get("breakout_volume_confirmation") is True
+        and candidate.get("relative_volume") is not None
+        and float(candidate["relative_volume"]) >= float(ranking.get("minimum_breakout_relative_volume", 1.5))
+        and components["fundamental_quality"] >= float(ranking.get("minimum_fundamental_score_for_action", 70))
+        and components["relative_strength_group"] >= float(ranking.get("minimum_rs_group_score_for_action", 65))
+        and components["technical_setup"] >= float(ranking.get("minimum_technical_score_for_action", 70))
+        and candidate.get("industry_group_rank") is not None
+        and int(candidate["industry_group_rank"]) <= int(ranking.get("maximum_industry_group_rank_for_action", 40))
+        and candidate.get("institutional_sponsorship_status") == "VERIFIED_SUPPORTIVE"
+        and candidate.get("earnings_status") == "VERIFIED"
+        and candidate.get("days_to_earnings") is not None
+        and int(candidate["days_to_earnings"]) >= int(ranking.get("minimum_days_to_earnings_for_action", 5))
+        and market_permission["status"] == "PERMITTED"
+    ):
+        classification = "EARLY_ENTRY"
+        action = CANDIDATE_ACTION_EARLY
+        rationale = "All verified early-entry, volume, C/A, leadership, sponsorship, earnings-risk and market-permission gates pass."
     elif candidate.get("extended") is True:
-        classification = "EXTENDED"
-        action = ACTION_HOLD
-        rationale = "Candidate is extended beyond the configured buy zone."
+        classification = "WAIT_FOR_CONFIRMATION"
+        action = CANDIDATE_ACTION_WAIT
+        rationale = "Price is beyond the configured verified-entry buy zone; wait for a new setup."
+    elif (
+        candidate.get("base_candidate_status") == "CANDIDATE_ONLY"
+        and candidate.get("candidate_resistance_distance_pct") is not None
+        and float(ranking.get("near_resistance_lower_pct", -5))
+        <= float(candidate["candidate_resistance_distance_pct"])
+        <= float(ranking.get("near_resistance_upper_pct", 2))
+    ):
+        classification = "WATCH_NEAR_PIVOT"
+        action = CANDIDATE_ACTION_NEAR
+        rationale = "Price is near algorithmic resistance, but the base and pivot remain unverified."
+    elif candidate.get("base_candidate_status") == "CANDIDATE_ONLY":
+        classification = "WATCH_BUILDING"
+        action = CANDIDATE_ACTION_BUILDING
+        rationale = "A technical base candidate exists, but it is not a verified actionable structure."
+    if action == CANDIDATE_ACTION_BUY and candidate.get("pivot_verification_status") != "verified":
+        raise ValueError("BUY NOW cannot be assigned without a verified pivot")
+    if action == CANDIDATE_ACTION_EARLY and candidate.get("early_entry_verification_status") != "verified":
+        raise ValueError("EARLY ENTRY cannot be assigned without a verified early-entry safeguard")
+    confidence = _candidate_confidence({**candidate, "missing_evidence": missing})
+    trigger = _candidate_trigger(candidate, action, ranking)
+    risk = _candidate_risk(candidate)
     return {
         "ticker": candidate.get("ticker", "UNKNOWN"),
         "origin": candidate.get("origin"),
@@ -394,14 +625,34 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
         "classification": classification,
         "action": action,
         "rationale": rationale,
+        "confidence": confidence,
+        "ranking_eligibility": {
+            "status": "ELIGIBLE" if ranking_eligible else "REJECTED",
+            "rejection_reasons": rejection_reasons,
+            "available_dimension_count": available_count,
+            "minimum_available_dimensions": int(ranking.get("minimum_available_dimensions", 3)),
+        },
+        "why_ranked": _why_ranked(components, candidate),
+        "missing_evidence": missing,
+        "trigger": trigger,
+        "risk_invalidates": risk,
+        "market_permission": market_permission,
         "snapshot": {
             key: candidate.get(key)
             for key in [
-                "company_name", "sector", "current_price", "candidate_resistance",
+                "company_name", "sector", "industry", "market_cap", "asset_class", "current_price", "candidate_resistance",
                 "candidate_resistance_distance_pct", "pct_from_52w_high", "relative_volume",
-                "average_dollar_volume", "volume_evidence_status", "quantitative_gate", "gate_reasons", "rs_trend",
-                "earnings_date", "source_labels", "source_evidence", "base_candidate_status",
-                "base_length_weeks", "base_depth_pct", "pivot_missing_evidence",
+                "average_dollar_volume", "volume_evidence_status", "up_down_volume_ratio_20",
+                "accumulation_distribution_estimate", "quantitative_gate", "gate_reasons", "rs_trend",
+                "rs_change_21d_pct", "rs_new_high_52w", "earnings_date", "days_to_earnings", "earnings_status",
+                "quarterly_eps_growth_pct", "quarterly_sales_growth_pct", "annual_eps_growth_pct",
+                "annual_positive_eps_growth_count", "annual_eps_growth_observations", "industry_group_rank",
+                "institutional_sponsorship_status", "source_labels", "source_evidence", "origin_categories",
+                "market_surge_candidate", "is_current_open_position", "chart_evidence_status", "setup_pattern_state",
+                "base_candidate_status", "base_length_weeks", "base_depth_pct", "pivot_missing_evidence",
+                "pivot_verification_status", "pivot_structure_verification_status", "pivot_gate_statuses",
+                "exact_pivot_price", "early_entry_price", "early_entry_verification_status",
+                "breakout_volume_confirmation", "sma21", "sma50", "sma200", "available_dimensions",
                 "daily_chart_asset",
             ]
         },
@@ -413,6 +664,31 @@ def score_candidate(candidate: dict[str, Any], policy: dict[str, Any]) -> dict[s
                 rationale,
                 score=round(total, 2),
                 pivot_verification_status=candidate.get("pivot_verification_status"),
+                action=action,
+                confidence=confidence,
+                trigger=trigger,
+                risk_invalidates=risk,
+                missing_evidence=missing,
             )
         ],
     }
+
+
+def rank_top_canslim_setups(
+    candidate_results: list[dict[str, Any]], policy: dict[str, Any]
+) -> list[dict[str, Any]]:
+    maximum = int((policy.get("candidate_ranking") or {}).get("maximum_ranked_setups", 10))
+    eligible = [
+        item
+        for item in candidate_results
+        if (item.get("ranking_eligibility") or {}).get("status") == "ELIGIBLE"
+    ]
+    eligible.sort(
+        key=lambda item: (
+            -float(item.get("internal_canslim_score") or 0),
+            -float((item.get("score_components") or {}).get("technical_setup") or 0),
+            -float((item.get("score_components") or {}).get("relative_strength_group") or 0),
+            str(item.get("ticker") or ""),
+        )
+    )
+    return [{**item, "rank": index} for index, item in enumerate(eligible[:maximum], start=1)]

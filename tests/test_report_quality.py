@@ -6,7 +6,6 @@ import pytest
 from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
 from market_chart_pipeline.render import (
-    _first_chart_candidates,
     audit_rendered_pdf,
     render_markdown,
     render_pdf,
@@ -164,18 +163,30 @@ def test_pdf_rejects_tampered_sell_sandbox_asset(tmp_path: Path):
         render_pdf(packet, report_dir=tmp_path)
 
 
-def test_complete_watchlist_and_position_failure_pages_are_rendered(tmp_path: Path):
-    watchlist = [
+def test_top10_replaces_duplicate_lists_and_position_failure_page_is_preserved(tmp_path: Path):
+    candidates = [
         {
             "ticker": f"W{index:02d}",
             "origin": "watchlist",
-            "internal_canslim_score": 10,
-            "classification": "WATCH",
-            "action": "HOLD",
+            "rank": index,
+            "internal_canslim_score": 80 - index,
+            "classification": "WATCH_BUILDING",
+            "action": "WATCH / BUILDING",
+            "confidence": "LOW",
             "rationale": "Pivot is not verified.",
-            "snapshot": {"source_labels": ["BRANDENS WATCHLIST"]},
+            "why_ranked": "Sourced technical evidence.",
+            "missing_evidence": ["exact_pivot_price"],
+            "trigger": "Verify a proper base and pivot.",
+            "risk_invalidates": "Failure below the 50-day average.",
+            "snapshot": {
+                "source_evidence": [{"source_type": "BRANDENS_WATCHLIST", "label": "BRANDENS WATCHLIST", "pdf_page": 8, "rank": index}],
+                "setup_pattern_state": "TECHNICAL BASE CANDIDATE",
+                "pivot_verification_status": "unverified",
+                "candidate_resistance": 25,
+                "candidate_resistance_distance_pct": -2,
+            },
         }
-        for index in range(1, 16)
+        for index in range(1, 11)
     ]
     packet = {
         "session_date": SESSION,
@@ -192,50 +203,36 @@ def test_complete_watchlist_and_position_failure_pages_are_rendered(tmp_path: Pa
             "events": [{"rule": "critical_evidence", "status": "INSUFFICIENT_EVIDENCE", "values": {}}],
             "position_snapshot": {"sell_sandbox_status": "insufficient_evidence", "sell_sandbox_error": "Missing verified price history."},
         }],
-        "candidate_results": watchlist,
-        "chart_verification": {"verified_tickers": [], "requested_tickers": [item["ticker"] for item in watchlist]},
-        "input_sets": {"portfolio_tickers": ["FAIL"], "watchlist_tickers": [item["ticker"] for item in watchlist]},
+        "candidate_results": candidates,
+        "top_canslim_setups": candidates,
+        "candidate_universe_audit": {
+            "distinct_manifest_ticker_count": 10,
+            "valid_manifest_equity_count": 10,
+            "open_position_exclusion_count": 0,
+            "non_equity_exclusion_count": 0,
+            "adequately_evidenced_count": 10,
+            "rejected": [],
+        },
+        "chart_verification": {"verified_tickers": [], "requested_tickers": [item["ticker"] for item in candidates]},
+        "input_sets": {"portfolio_tickers": ["FAIL"], "watchlist_tickers": [item["ticker"] for item in candidates]},
     }
     markdown = render_markdown(packet)
-    assert "Complete Results (15)" in markdown
-    assert all(f"**{item['ticker']}**" in markdown for item in watchlist)
-    assert markdown.count("result WATCH; action NO ACTION") == 15
+    assert "## Top 10 CANSLIM Setups (10)" in markdown
+    assert all(f"### #{item['rank']} {item['ticker']}" in markdown for item in candidates)
+    assert "Brandens Watchlist - Complete Results" not in markdown
+    assert "Visual Review Queue" not in markdown
+    assert "First Charts to Review" not in markdown
     pdf_path = tmp_path / "review.pdf"
     pdf_path.write_bytes(render_pdf(packet, report_dir=tmp_path))
     evidence = audit_rendered_pdf(pdf_path, packet)
-    assert {item["gate"] for item in evidence} == {"position_sandbox_page", "complete_watchlist_render"}
+    assert {item["gate"] for item in evidence} == {"position_sandbox_page", "top_canslim_render", "candidate_universe_appendix"}
     from pypdf import PdfReader
     text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf_path)).pages)
     assert "SELL-RULE SANDBOX UNAVAILABLE - FAIL" in text
     assert "FAIL daily chart through" not in text
-
-
-def test_first_charts_are_only_the_top_four_chart_review_priority_names():
-    def candidate(ticker, score, gate, chart=True):
-        return {
-            "ticker": ticker,
-            "origin": "scanner",
-            "internal_canslim_score": score,
-            "snapshot": {
-                "quantitative_gate": gate,
-                "daily_chart_asset": {"file": f"charts/{ticker}.png", "sha256": "x"} if chart else None,
-            },
-        }
-
-    packet = {
-        "candidate_results": [
-            candidate("NONPRIORITY", 99, "CHART_REVIEW"),
-            candidate("AAA", 80, "CHART_REVIEW_PRIORITY"),
-            candidate("BBB", 90, "CHART_REVIEW_PRIORITY"),
-            candidate("CCC", 70, "CHART_REVIEW_PRIORITY"),
-            candidate("DDD", 60, "CHART_REVIEW_PRIORITY"),
-            candidate("EEE", 50, "CHART_REVIEW_PRIORITY"),
-            candidate("NOCHART", 100, "CHART_REVIEW_PRIORITY", chart=False),
-        ],
-        "input_sets": {"portfolio_tickers": []},
-    }
-
-    assert [item["ticker"] for item in _first_chart_candidates(packet)] == ["BBB", "AAA", "CCC", "DDD"]
+    assert "Brandens Watchlist - Complete Results" not in text
+    assert "Visual Review Queue" not in text
+    assert "First Charts to Review" not in text
 
 
 def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():

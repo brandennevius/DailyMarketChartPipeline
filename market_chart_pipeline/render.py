@@ -12,6 +12,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     Image,
+    KeepTogether,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -66,6 +67,7 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h2": ParagraphStyle("ReviewH2", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=INK, spaceBefore=7, spaceAfter=5),
         "body": ParagraphStyle("ReviewBody", parent=base["BodyText"], fontName="Helvetica", fontSize=8.8, leading=12.5, textColor=INK, spaceAfter=5),
         "small": ParagraphStyle("ReviewSmall", parent=base["BodyText"], fontName="Helvetica", fontSize=7.4, leading=10, textColor=MUTED),
+        "candidate": ParagraphStyle("ReviewCandidate", parent=base["BodyText"], fontName="Helvetica", fontSize=6.6, leading=8.1, textColor=INK),
         "table": ParagraphStyle("ReviewTable", parent=base["BodyText"], fontName="Helvetica", fontSize=7.2, leading=9, textColor=INK),
         "table_right": ParagraphStyle("ReviewTableRight", parent=base["BodyText"], fontName="Helvetica", fontSize=7.2, leading=9, textColor=INK, alignment=TA_RIGHT),
         "table_head": ParagraphStyle("ReviewTableHead", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=7, leading=8.5, textColor=WHITE),
@@ -103,41 +105,35 @@ def _headline(packet: dict[str, Any]) -> str:
     return "No portfolio position requires a deterministic sell action."
 
 
-def _review_candidates(packet: dict[str, Any], limit: int | None = None) -> list[dict[str, Any]]:
-    """Distinct non-portfolio names, ordered priority gate, score, then ticker."""
-    positions = set(packet.get("input_sets", {}).get("portfolio_tickers", []))
-    candidates = [item for item in packet.get("candidate_results", []) if item.get("ticker") not in positions]
-    candidates.sort(
-        key=lambda item: (
-            0 if item.get("snapshot", {}).get("quantitative_gate") == "CHART_REVIEW_PRIORITY" else 1,
-            -float(item.get("internal_canslim_score") or 0),
-            item.get("ticker", ""),
-        )
+def _top_setups(packet: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(packet.get("top_canslim_setups") or [])
+
+
+def _source_provenance(item: dict[str, Any], limit: int | None = None) -> str:
+    sources = list((item.get("snapshot") or {}).get("source_evidence") or [])
+    labels = []
+    for source in sources:
+        label = str(source.get("label") or source.get("source_type") or "MarketSurge")
+        details = []
+        if source.get("pdf_page") is not None:
+            details.append(f"p.{source['pdf_page']}")
+        if source.get("rank") is not None:
+            details.append(f"rank {source['rank']}")
+        labels.append(f"{label} ({', '.join(details)})" if details else label)
+    if limit is not None and len(labels) > limit:
+        return "; ".join(labels[:limit]) + f" (+{len(labels) - limit} more sources)"
+    return "; ".join(labels) or "MarketSurge provenance unavailable"
+
+
+def _candidate_context(item: dict[str, Any]) -> str:
+    snap = item.get("snapshot") or {}
+    earnings = snap.get("earnings_date") or snap.get("earnings_status") or "unavailable"
+    return (
+        f"RS {snap.get('rs_trend') or 'unavailable'}"
+        f" ({_pct(snap.get('rs_change_21d_pct'))}); rel vol {_number(snap.get('relative_volume'))}x; "
+        f"quarter EPS {_pct(snap.get('quarterly_eps_growth_pct'))}; sales {_pct(snap.get('quarterly_sales_growth_pct'))}; "
+        f"earnings {earnings}"
     )
-    return candidates if limit is None else candidates[:limit]
-
-
-def _first_chart_candidates(packet: dict[str, Any], limit: int = 4) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in _review_candidates(packet)
-        if item.get("snapshot", {}).get("quantitative_gate") == "CHART_REVIEW_PRIORITY"
-        and item.get("snapshot", {}).get("daily_chart_asset")
-    ][:limit]
-
-
-def _watchlist_candidates(packet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return every watchlist-derived result; this list must never be rank-truncated."""
-    return sorted(
-        (item for item in packet.get("candidate_results", []) if item.get("origin") == "watchlist"),
-        key=lambda item: str(item.get("ticker") or ""),
-    )
-
-
-def _candidate_action_label(item: dict[str, Any]) -> str:
-    if item.get("origin") != "open_position" and item.get("classification") == "WATCH" and item.get("action") == "HOLD":
-        return "NO ACTION"
-    return str(item.get("action") or "-")
 
 
 def _pivot_gap_text(item: dict[str, Any], limit: int | None = None) -> str:
@@ -174,7 +170,7 @@ def render_markdown(packet: dict[str, Any]) -> str:
         "",
         "## Decision Summary",
         f"- {_headline(packet)}",
-        "- No candidate is eligible for ADD until its pivot is visually verified.",
+        "- BUY NOW and EARLY ENTRY require fully verified setup, volume, leadership, earnings-risk, and market-permission gates; algorithmic resistance alone is never actionable.",
         f"- Account value: {_money(risk.get('account_value'))}; gross exposure: {_pct(risk.get('gross_exposure_pct'))}; open P&L: {_money(risk.get('total_open_pnl'))}.",
         f"- Remaining risk to stops: {_money(risk.get('total_remaining_risk_to_stops'))} ({_pct(risk.get('total_remaining_risk_pct'))} of equity).",
         "",
@@ -263,35 +259,40 @@ def render_markdown(packet: dict[str, Any]) -> str:
             f"open R {_number(snap.get('open_r_multiple'))}, stop {_money(snap.get('stop_price'), 2)}, "
             f"target {_money(snap.get('take_profit'), 2)}. {result['rationale']}"
         )
-    watchlist = _watchlist_candidates(packet)
+    top_setups = _top_setups(packet)
+    universe = packet.get("candidate_universe_audit") or {}
     lines.extend(
         [
             "",
-            f"## Brandens Watchlist - Complete Results ({len(watchlist)})",
-            "- Every MarketSurge row labeled BRANDENS WATCHLIST is retained below; the list is not truncated by rank.",
+            f"## Top 10 CANSLIM Setups ({len(top_setups)})",
+            "- Global ranking across every distinct valid equity ticker in the frozen MarketSurge PDF. Current open positions and non-equities are excluded; list labels do not confer priority.",
+            "- Scores use only frozen C/A, RS/group proxy, technical setup, supply/demand, and new/proximity evidence. The frozen market posture gates actions but does not add score points.",
         ]
     )
-    for item in watchlist:
-        snap = item.get("snapshot", {})
-        labels = ", ".join(snap.get("source_labels") or []) or "BRANDENS WATCHLIST"
-        chart_status = "verified chart record" if item.get("ticker") in packet.get("chart_verification", {}).get("verified_tickers", []) else "chart evidence unavailable"
+    if len(top_setups) < 10:
         lines.append(
-            f"- **{item['ticker']}** - origin WATCHLIST; source {labels}; result {item.get('classification')}; "
-            f"action {_candidate_action_label(item)}; {chart_status}; visual resistance {_money(snap.get('candidate_resistance'), 2)} "
-            f"({_pct(snap.get('candidate_resistance_distance_pct'))}); missing pivot proof: {_pivot_gap_text(item)}."
+            f"- Fewer than 10 are shown because only {universe.get('adequately_evidenced_count', 0)} distinct non-portfolio equities met the minimum evidence and eligibility gates."
         )
-    lines.extend([
-        "",
-        "## Visual Review Queue",
-        "- Membership: every distinct scanner/watchlist candidate after excluding any ticker analyzed as an open long. Unsupported portfolio instruments are not appended.",
-        "- Order: CHART_REVIEW_PRIORITY first, then internal score descending, then ticker. These are research priorities, not buy signals.",
-    ])
-    for item in _review_candidates(packet):
-        snap = item.get("snapshot", {})
-        lines.append(
-            f"- **{item['ticker']}**: score {item['internal_canslim_score']}; price {_money(snap.get('current_price'), 2)}; "
-            f"visual resistance {_money(snap.get('candidate_resistance'), 2)}; RS {snap.get('rs_trend') or '-'}; "
-            f"earnings {snap.get('earnings_date') or '-'}; missing pivot proof: {_pivot_gap_text(item)}"
+    for item in top_setups:
+        snap = item.get("snapshot") or {}
+        resistance_status = (
+            f"verified pivot {_money(snap.get('exact_pivot_price'), 2)}"
+            if snap.get("pivot_verification_status") == "verified"
+            else f"algorithmic resistance {_money(snap.get('candidate_resistance'), 2)} (not a verified pivot)"
+        )
+        lines.extend(
+            [
+                "",
+                f"### #{item['rank']} {item['ticker']} — {item.get('action')} | Score {_number(item.get('internal_canslim_score'))} | {item.get('confidence')} confidence",
+                f"- **Origin:** {_source_provenance(item)}.",
+                f"- **Setup:** {snap.get('setup_pattern_state') or 'INSUFFICIENT EVIDENCE'}; {resistance_status}; distance {_pct(snap.get('candidate_resistance_distance_pct'))}.",
+                f"- **Context:** {_candidate_context(item)}.",
+                f"- **Why ranked:** {item.get('why_ranked')}",
+                f"- **Missing evidence:** {', '.join(item.get('missing_evidence') or []) or 'none'}.",
+                f"- **Action:** {item.get('action')}. {item.get('rationale')}",
+                f"- **Trigger:** {item.get('trigger')}",
+                f"- **Risk / invalidates:** {item.get('risk_invalidates')}",
+            ]
         )
     lines.extend(
         [
@@ -299,6 +300,9 @@ def render_markdown(packet: dict[str, Any]) -> str:
             "## Evidence Limits",
             "- A proper O'Neil market regime requires index follow-through and distribution-day evidence, which was not present in this packet.",
             "- Candidate resistance is a visual reference only. It is not treated as a verified pivot or permission to buy.",
+            f"- MarketSurge universe audit: {universe.get('distinct_manifest_ticker_count', 0)} distinct tickers; {universe.get('valid_manifest_equity_count', 0)} valid equities; {universe.get('open_position_exclusion_count', 0)} open-position exclusions; {universe.get('non_equity_exclusion_count', 0)} non-equity exclusions; {len(universe.get('rejected') or [])} rejected after evidence/eligibility gates.",
+            "- Complete classifications, rejection reasons, provenance, and scoring components remain in canonical JSON under candidate_results and candidate_universe_audit.",
+            "- News and LLM synthesis cannot create, remove, score, or reorder candidates.",
             f"- Policy {packet['policy_version']}; packet {packet['packet_sha256']}.",
         ]
     )
@@ -455,7 +459,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     ]
     story.append(_table(breadth_rows, [0.78 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 0.88 * inch, 0.95 * inch, 0.95 * inch], styles, set(range(7))))
     story.append(Spacer(1, 8))
-    story.append(_p("Entry posture: no candidate is eligible for ADD. The review queue on the following pages is ranked research, and every resistance level still requires visual pivot confirmation.", styles["body"]))
+    story.append(_p("Entry posture: BUY NOW and EARLY ENTRY require verified entry, volume, leadership, earnings-risk, and market-permission gates. Algorithmic resistance alone is never actionable.", styles["body"]))
 
     story.append(_p("Cross-Market Context", styles["h1"]))
     window = cross_market.get("lookback_window") or {}
@@ -548,67 +552,62 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         if index < len(results) - 1:
             story.append(PageBreak())
 
-    watchlist = _watchlist_candidates(packet)
+    top_setups = _top_setups(packet)
+    universe = packet.get("candidate_universe_audit") or {}
     story.append(PageBreak())
-    story.append(_p(f"Brandens Watchlist - Complete Results ({len(watchlist)})", styles["title"]))
-    story.append(_p("Every MarketSurge source row labeled BRANDENS WATCHLIST is shown alphabetically. Coverage is complete and is never truncated by rank.", styles["subtitle"]))
-    watchlist_rows = [["Ticker", "Origin / source", "Result / action", "Chart", "Resistance / dist.", "Missing pivot evidence"]]
-    verified_tickers = set(packet.get("chart_verification", {}).get("verified_tickers", []))
-    for item in watchlist:
-        snap = item.get("snapshot", {})
-        watchlist_rows.append([
-            item.get("ticker"),
-            f"WATCHLIST\n{', '.join(snap.get('source_labels') or []) or 'BRANDENS WATCHLIST'}",
-            f"{item.get('classification')}\n{_candidate_action_label(item)}",
-            "verified" if item.get("ticker") in verified_tickers else "unavailable",
-            f"{_money(snap.get('candidate_resistance'), 2)}\n{_pct(snap.get('candidate_resistance_distance_pct'))}",
-            _pivot_gap_text(item),
-        ])
-    if len(watchlist_rows) == 1:
-        watchlist_rows.append(["-", "WATCHLIST", "No rows supplied", "-", "-", "-"])
-    story.append(_table(watchlist_rows, [0.5 * inch, 1.35 * inch, 1.15 * inch, 0.6 * inch, 0.9 * inch, 2.4 * inch], styles))
-
-    story.append(PageBreak())
-    story.append(_p("Visual Review Queue", styles["title"]))
-    story.append(_p("Membership: every distinct scanner/watchlist candidate after excluding any ticker analyzed as an open long. Order: CHART_REVIEW_PRIORITY first, then internal score descending, then ticker. Unsupported portfolio instruments are not appended. Candidate resistance is an algorithmic visual reference, not a verified pivot.", styles["subtitle"]))
-    candidate_rows = [["Ticker", "Company / sector", "Score", "Price", "Visual resistance", "Dist.", "RS", "Rel vol", "Earnings"]]
-    for item in _review_candidates(packet):
-        snap = item.get("snapshot", {})
-        company = snap.get("company_name") or "-"
-        sector = snap.get("sector") or "-"
-        candidate_rows.append([
-            item.get("ticker"), f"{company}\n{sector}", _number(item.get("internal_canslim_score")), _money(snap.get("current_price"), 2), _money(snap.get("candidate_resistance"), 2), _pct(snap.get("candidate_resistance_distance_pct")), snap.get("rs_trend") or "-", _number(snap.get("relative_volume")), snap.get("earnings_date") or "-",
-        ])
-    story.append(_table(candidate_rows, [0.48 * inch, 1.65 * inch, 0.5 * inch, 0.62 * inch, 0.78 * inch, 0.55 * inch, 0.53 * inch, 0.55 * inch, 0.72 * inch], styles, {2, 3, 4, 5, 7}))
-    story.extend([Spacer(1, 10), _p("How to use this queue", styles["h1"]), _p("Start with CHART_REVIEW_PRIORITY names, confirm a proper base and exact pivot on the current daily and weekly charts, reject extended entries, and verify earnings and liquidity before any action. Non-owned WATCH names remain NO ACTION until those gates are satisfied.", styles["body"])])
-
-    chart_candidates = _first_chart_candidates(packet, 4)
-    if chart_candidates and chart_dir:
-        story.append(PageBreak())
-        story.append(_p("First Charts to Review", styles["title"]))
-        story.append(_p("Up to the first four chart-backed CHART_REVIEW_PRIORITY names, ordered by internal score descending and ticker. Resistance labels remain visual references, not verified pivots.", styles["subtitle"]))
-        chart_cells = []
-        for item in chart_candidates:
-            snap = item.get("snapshot", {})
-            asset = snap.get("daily_chart_asset") or {}
-            path = chart_dir / asset.get("file", "")
-            if not path.exists():
-                continue
-            caption = _p(
-                f"{item['ticker']} | score {_number(item.get('internal_canslim_score'))} | "
-                f"price {_money(snap.get('current_price'), 2)} | visual resistance {_money(snap.get('candidate_resistance'), 2)}",
-                styles["small"],
-            )
-            chart_cells.append([[Image(str(path), width=3.2 * inch, height=1.85 * inch, kind="proportional")], [caption]])
-        grid_rows = []
-        for offset in range(0, len(chart_cells), 2):
-            row = chart_cells[offset : offset + 2]
-            while len(row) < 2:
-                row.append([[Spacer(1, 1)], [Spacer(1, 1)]])
-            grid_rows.append([Table(row[0], colWidths=[3.25 * inch]), Table(row[1], colWidths=[3.25 * inch])])
-        chart_grid = Table(grid_rows, colWidths=[3.4 * inch, 3.4 * inch], hAlign="LEFT")
-        chart_grid.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.4, LINE), ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE), ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
-        story.append(chart_grid)
+    story.append(_p(f"Top 10 CANSLIM Setups ({len(top_setups)})", styles["title"]))
+    story.append(_p(
+        "Global deterministic ranking across every distinct valid equity in the frozen MarketSurge PDF. Current open positions and non-equities are excluded; MarketSurge list labels do not confer priority. Market posture gates actions but does not add score points.",
+        styles["subtitle"],
+    ))
+    if len(top_setups) < 10:
+        story.append(_p(
+            f"Only {len(top_setups)} names are printed because {universe.get('adequately_evidenced_count', 0)} distinct non-portfolio equities met the minimum evidence and eligibility gates.",
+            styles["body"],
+        ))
+    for index, item in enumerate(top_setups):
+        if index and index % 5 == 0:
+            story.append(PageBreak())
+            story.append(Spacer(1, 5))
+            story.append(_p("Top 10 CANSLIM Setups (continued)", styles["title"]))
+        snap = item.get("snapshot") or {}
+        pivot_text = (
+            f"VERIFIED pivot {_money(snap.get('exact_pivot_price'), 2)}"
+            if snap.get("pivot_verification_status") == "verified"
+            else f"candidate resistance {_money(snap.get('candidate_resistance'), 2)}; NOT A VERIFIED PIVOT"
+        )
+        missing_items = list(item.get("missing_evidence") or [])
+        missing = ", ".join(missing_items[:6]) or "none"
+        if len(missing_items) > 6:
+            missing += f" (+{len(missing_items) - 6} more in canonical JSON)"
+        body = Paragraph(
+            "<b>Origin:</b> " + escape(_source_provenance(item, 2)) + "<br/>"
+            + "<b>Setup/pivot:</b> " + escape(f"{snap.get('setup_pattern_state') or 'INSUFFICIENT EVIDENCE'} | {pivot_text} | distance {_pct(snap.get('candidate_resistance_distance_pct'))}") + "<br/>"
+            + "<b>Context:</b> " + escape(_candidate_context(item)) + "<br/>"
+            + "<b>Why ranked:</b> " + escape(item.get("why_ranked") or "insufficient evidence") + " <b>Missing:</b> " + escape(missing) + ".<br/>"
+            + "<b>Action:</b> " + escape(f"{item.get('action')}. {item.get('rationale')}") + " <b>Trigger:</b> " + escape(item.get("trigger") or "No verified trigger") + "<br/>"
+            + "<b>Risk/invalidates:</b> " + escape(item.get("risk_invalidates") or "INSUFFICIENT EVIDENCE"),
+            styles["candidate"],
+        )
+        card_rows = [
+            [_p(f"#{item['rank']} {item['ticker']}", styles["h2"]), _p(f"{item.get('action')} | score {_number(item.get('internal_canslim_score'))} | {item.get('confidence')}", styles["badge"])],
+            [body, ""],
+        ]
+        card = Table(card_rows, colWidths=[1.25 * inch, 5.55 * inch], hAlign="LEFT")
+        bg, fg = _action_color("REPAIR" if item.get("action") in {"WAIT FOR CONFIRMATION", "AVOID", "INSUFFICIENT EVIDENCE"} else "HOLD")
+        card.setStyle(TableStyle([
+            ("SPAN", (0, 0), (0, 0)),
+            ("BACKGROUND", (0, 0), (-1, 0), bg),
+            ("TEXTCOLOR", (1, 0), (1, 0), fg),
+            ("SPAN", (0, 1), (1, 1)),
+            ("GRID", (0, 0), (-1, -1), 0.35, LINE),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(KeepTogether([card, Spacer(1, 5)]))
 
     story.append(PageBreak())
     story.append(_p("Evidence, Controls, and Limits", styles["title"]))
@@ -620,7 +619,10 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
         f"Portfolio snapshot matched the {session} session and contained current closing prices and broker working stops.",
         f"{verified_count} of {requested_count} requested symbols had current-session daily and weekly chart records.",
         f"{sum(1 for item in results if item.get('position_snapshot', {}).get('sell_sandbox_status') == 'verified')} of {len(results)} open long positions had hash-verified sell-rule sandbox charts.",
+        f"MarketSurge audit retained {universe.get('distinct_manifest_ticker_count', 0)} distinct manifest tickers and {universe.get('valid_manifest_equity_count', 0)} valid equities; excluded {universe.get('open_position_exclusion_count', 0)} open positions and {universe.get('non_equity_exclusion_count', 0)} non-equities from new-entry ranking.",
+        f"{universe.get('adequately_evidenced_count', 0)} candidates met minimum ranking evidence; {len(top_setups)} were printed. Complete classifications and rejections remain in canonical JSON.",
         "Hard capital-protection rules were evaluated before trailing, patience, profit-zone, and candidate signals.",
+        "News and LLM synthesis did not create, score, remove, or reorder candidates.",
         "The canonical packet was audited and hash-frozen before Markdown and PDF rendering.",
     ]
     for line in evidence_lines:
@@ -640,6 +642,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     story.append(_p("Audit identity", styles["h1"]))
     identity_rows = [
         ["Policy", packet.get("policy_version")],
+        ["Calculation", packet.get("calculation_version")],
         ["Packet SHA-256", packet.get("packet_sha256")],
         ["Audit profile", packet.get("audit_profile")],
         ["Price as of", risk.get("price_as_of") or "-"],
@@ -664,7 +667,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
 
 
 def audit_rendered_pdf(pdf_path: Path, packet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Verify every position and watchlist row survived final PDF composition."""
+    """Verify position safeguards and the decision-facing Top 10 survived PDF composition."""
     from pypdf import PdfReader
 
     reader = PdfReader(str(pdf_path))
@@ -681,10 +684,29 @@ def audit_rendered_pdf(pdf_path: Path, packet: dict[str, Any]) -> list[dict[str,
         if len(matching_pages) != 1:
             raise ValidationError(f"{ticker}: rendered PDF must contain exactly one dedicated sell-sandbox status page")
         evidence.append({"gate": "position_sandbox_page", "status": "pass", "ticker": ticker, "pdf_page": matching_pages[0]})
-    watchlist = _watchlist_candidates(packet)
     full_text = "\n".join(page_text)
-    missing = [str(item.get("ticker")) for item in watchlist if str(item.get("ticker")) not in full_text]
-    if missing:
-        raise ValidationError(f"Rendered PDF omitted watchlist results: {sorted(missing)}")
-    evidence.append({"gate": "complete_watchlist_render", "status": "pass", "ticker_count": len(watchlist)})
+    forbidden_labels = ["Brandens Watchlist - Complete Results", "Visual Review Queue", "First Charts to Review"]
+    present_forbidden = [label for label in forbidden_labels if label in full_text]
+    if present_forbidden:
+        raise ValidationError(f"Rendered PDF retained superseded candidate sections: {present_forbidden}")
+    top_setups = _top_setups(packet)
+    for item in top_setups:
+        anchor = f"#{item.get('rank')} {item.get('ticker')}"
+        matches = [index + 1 for index, text in enumerate(page_text) if anchor in text]
+        if len(matches) != 1:
+            raise ValidationError(f"Rendered PDF must contain exactly one ranked setup card for {item.get('ticker')}")
+    evidence.append({
+        "gate": "top_canslim_render",
+        "status": "pass",
+        "ticker_count": len(top_setups),
+        "tickers": [item.get("ticker") for item in top_setups],
+    })
+    universe = packet.get("candidate_universe_audit") or {}
+    if "Complete classifications and rejections remain in canonical JSON" not in full_text:
+        raise ValidationError("Rendered PDF omitted compact full-universe audit reference")
+    evidence.append({
+        "gate": "candidate_universe_appendix",
+        "status": "pass",
+        "distinct_manifest_ticker_count": universe.get("distinct_manifest_ticker_count", 0),
+    })
     return evidence

@@ -9,6 +9,8 @@ from .core import ValidationError
 UNVERIFIED_PIVOT_GATES = [
     "prior_uptrend",
     "conventional_base_type",
+    "base_duration",
+    "base_depth",
     "base_stage",
     "handle_quality_where_applicable",
     "weekly_structure",
@@ -16,6 +18,30 @@ UNVERIFIED_PIVOT_GATES = [
     "exact_pivot_price",
     "breakout_volume_confirmation",
 ]
+
+
+def _pivot_verification(base: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
+    structural_statuses = {
+        "prior_uptrend": base.get("prior_uptrend_status"),
+        "conventional_base_type": base.get("base_type_status"),
+        "base_duration": base.get("base_duration_status"),
+        "base_depth": base.get("base_depth_status"),
+        "base_stage": base.get("stage_status"),
+        "handle_quality_where_applicable": base.get("handle_quality_status"),
+        "weekly_structure": base.get("weekly_structure_status"),
+        "volume_contraction": base.get("volume_contraction_status"),
+    }
+    missing = [
+        name
+        for name, status in structural_statuses.items()
+        if status not in {"VERIFIED", "NOT_APPLICABLE"}
+    ]
+    if base.get("pivot_price") is None or base.get("pivot_status") != "VERIFIED":
+        missing.append("exact_pivot_price")
+    if base.get("breakout_volume_confirmation") is not True:
+        missing.append("breakout_volume_confirmation")
+    status = "verified" if not missing else "unverified"
+    return status, sorted(set(missing)), structural_statuses
 
 
 def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -214,11 +240,150 @@ def _clamp(value: float) -> float:
     return round(max(0.0, min(100.0, value)), 2)
 
 
+def _positive_points(value: Any, target: float, maximum: float) -> float:
+    if value is None:
+        return 0.0
+    return max(0.0, min(maximum, float(value) / target * maximum))
+
+
+def _candidate_component_scores(
+    metrics: dict[str, Any],
+    quarterly: dict[str, Any],
+    annual: dict[str, Any],
+    relative: dict[str, Any],
+    volume: dict[str, Any],
+    base: dict[str, Any],
+    earnings: dict[str, Any],
+) -> tuple[dict[str, float], list[str], list[str]]:
+    """Score only sourced evidence; unavailable inputs contribute zero."""
+    eps_growth = quarterly.get("eps_growth_pct")
+    sales_growth = quarterly.get("revenue_growth_pct")
+    annual_eps = annual.get("annual_eps_growth_pct")
+    annual_positive = annual.get("three_year_positive_eps_growth_count")
+    annual_observations = annual.get("three_year_eps_growth_observations")
+    fundamental = _positive_points(eps_growth, 25, 40) + _positive_points(sales_growth, 25, 20)
+    fundamental += _positive_points(annual_eps, 25, 25)
+    if annual_positive is not None and annual_observations:
+        fundamental += min(15.0, float(annual_positive) / float(annual_observations) * 15.0)
+
+    rs_change = relative.get("change_21d_pct")
+    pct_from_high = metrics.get("pct_from_52w_high")
+    rs_group = 0.0
+    if relative.get("status") == "VERIFIED":
+        rs_group += {"RISING": 25.0, "FLAT": 10.0, "FALLING": 0.0}.get(relative.get("trend_21d"), 0.0)
+        rs_group += _positive_points(rs_change, 10, 25)
+        rs_group += 20.0 if relative.get("new_high_52w") is True else 0.0
+        if pct_from_high is not None:
+            rs_group += max(0.0, min(15.0, (10.0 + float(pct_from_high)) / 10.0 * 15.0))
+    # The remaining 15 points require a sourced industry-leadership rank, which
+    # the current FMP enrichment does not provide.
+
+    current = metrics.get("current_price")
+    sma21 = metrics.get("sma21")
+    sma50 = metrics.get("sma50")
+    sma200 = metrics.get("sma200")
+    technical = 0.0
+    if current is not None and sma21 is not None and float(current) > float(sma21):
+        technical += 10.0
+    if current is not None and sma50 is not None and float(current) > float(sma50):
+        technical += 15.0
+    if current is not None and sma200 is not None and float(current) > float(sma200):
+        technical += 15.0
+    if None not in (sma21, sma50, sma200) and float(sma21) > float(sma50) > float(sma200):
+        technical += 15.0
+    if base.get("status") == "CANDIDATE_ONLY":
+        technical += 20.0
+        weeks = base.get("base_length_weeks")
+        depth = base.get("base_depth_pct")
+        if weeks is not None and depth is not None and 6 <= float(weeks) <= 15 and 3 <= float(depth) <= 35:
+            technical += 10.0
+        distance = base.get("candidate_resistance_distance_pct")
+        if distance is not None and -8 <= float(distance) <= 2:
+            technical += 10.0
+    if metrics.get("quantitative_gate") == "CHART_REVIEW_PRIORITY":
+        technical += 5.0
+
+    supply = 0.0
+    if volume.get("status") == "VERIFIED":
+        rel_volume = metrics.get("relative_volume")
+        ratio = volume.get("up_down_volume_ratio_20")
+        if rel_volume is not None:
+            supply += 30.0 if float(rel_volume) >= 1.5 else 20.0 if float(rel_volume) >= 1.0 else 5.0
+        if ratio is not None:
+            supply += 35.0 if float(ratio) >= 1.5 else 20.0 if float(ratio) >= 1.0 else 0.0
+        supply += {"POSITIVE": 35.0, "NEUTRAL": 15.0, "NEGATIVE": 0.0}.get(
+            volume.get("accumulation_distribution_estimate"), 0.0
+        )
+
+    new = 0.0
+    if relative.get("new_high_52w") is True:
+        new += 40.0
+    resistance_distance = base.get("candidate_resistance_distance_pct")
+    if resistance_distance is not None and -8 <= float(resistance_distance) <= 2:
+        new += 40.0
+
+    available_dimensions = []
+    if any(value is not None for value in (eps_growth, sales_growth, annual_eps, annual_observations)):
+        available_dimensions.append("C_A_fundamentals")
+    if relative.get("status") == "VERIFIED":
+        available_dimensions.append("relative_strength")
+    if all(value is not None for value in (current, sma50, sma200)):
+        available_dimensions.append("technical_trend")
+    if volume.get("status") == "VERIFIED":
+        available_dimensions.append("supply_demand")
+    if relative.get("new_high_52w") is not None or resistance_distance is not None:
+        available_dimensions.append("new_or_proximity_context")
+
+    missing = []
+    for field, value in (
+        ("latest_quarter_eps_growth", eps_growth),
+        ("latest_quarter_sales_growth", sales_growth),
+        ("annual_eps_growth", annual_eps),
+        ("annual_eps_growth_consistency", annual_observations),
+    ):
+        if value is None:
+            missing.append(field)
+    missing.extend(
+        [
+            "prior_three_quarter_eps_sales_growth",
+            "estimates_and_revisions",
+            "margin_trend",
+            "industry_group_rank",
+            "institutional_sponsorship",
+        ]
+    )
+    if relative.get("status") != "VERIFIED":
+        missing.append("relative_strength_history")
+    if volume.get("status") != "VERIFIED":
+        missing.append("volume_confirmation")
+    if earnings.get("earnings_status") != "VERIFIED":
+        missing.append("earnings_date_risk")
+    if metrics.get("avg_dollar_volume_50") is None:
+        missing.append("average_dollar_volume")
+    if any(value is None for value in (current, sma50, sma200)):
+        missing.append("long_term_trend_alignment")
+    return (
+        {
+            "fundamental_quality": _clamp(fundamental),
+            "relative_strength_group": _clamp(rs_group),
+            "technical_setup": _clamp(technical),
+            "accumulation_supply": _clamp(supply),
+            "new_catalyst": _clamp(new),
+        },
+        sorted(set(missing)),
+        available_dimensions,
+    )
+
+
 def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path | None = None) -> list[dict[str, Any]]:
     candidates = []
     seen = set()
+    manifest_records = (chart_payload.get("source_manifest") or {}).get("records") or {}
     for record in chart_payload.get("records") or []:
         metrics = record.get("metrics") or {}
+        ticker = str(metrics.get("ticker") or "").upper()
+        if not ticker or ticker in seen:
+            continue
         technical = record.get("technical_context") or {}
         fmp = record.get("fmp") or {}
         quarterly = fmp.get("quarterly_growth") or {}
@@ -226,44 +391,46 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
         relative = technical.get("relative_strength") or {}
         volume = technical.get("volume") or {}
         base = technical.get("base_analysis") or {}
-        sources = record.get("sources") or []
-        source_types = {item.get("source_type") for item in sources}
+        sources = (manifest_records.get(ticker) or {}).get("sources") or record.get("sources") or []
+        source_types = {str(item.get("source_type")) for item in sources if item.get("source_type")}
         origin = "open_position" if "PORTFOLIO" in source_types else "watchlist" if "BRANDENS_WATCHLIST" in source_types else "scanner"
         pivot = base.get("pivot_price")
         current = metrics.get("current_price")
         distance = ((float(current) - float(pivot)) / float(pivot) * 100.0) if pivot and current else None
-        fundamental = _clamp(
-            50
-            + float(quarterly.get("eps_growth_pct") or 0) * 0.6
-            + float(quarterly.get("revenue_growth_pct") or 0) * 0.3
-            + float(annual.get("annual_eps_growth_pct") or 0) * 0.1
-        )
-        rs_score = _clamp(50 + (25 if relative.get("trend_21d") == "RISING" else -10) + (25 if relative.get("new_high_52w") else 0))
-        technical_score = _clamp(
-            25
-            + (25 if metrics.get("current_price") and metrics.get("sma50") and metrics["current_price"] > metrics["sma50"] else 0)
-            + (25 if metrics.get("sma50") and metrics.get("sma200") and metrics["sma50"] > metrics["sma200"] else 0)
-            + (25 if base.get("status") == "CANDIDATE_ONLY" else 0)
-        )
-        volume_verified = volume.get("status") == "VERIFIED"
-        accumulation = (
-            _clamp(50 + (float(volume.get("up_down_volume_ratio_20") or 1) - 1) * 25)
-            if volume_verified
-            else 0
-        )
         earnings = fmp.get("earnings") or {}
-        catalyst = 75 if earnings.get("earnings_status") == "VERIFIED" else 25
+        components, missing_evidence, available_dimensions = _candidate_component_scores(
+            metrics, quarterly, annual, relative, volume, base, earnings
+        )
+        pivot_status, pivot_missing, pivot_gate_statuses = _pivot_verification(base)
+        market_surge_sources = [item for item in sources if item.get("source_type") in {"STANDARD_MARKETSURGE", "BRANDENS_WATCHLIST"}]
+        profile = fmp.get("profile") or {}
         candidate = {
-                "ticker": metrics.get("ticker"),
+                "ticker": ticker,
                 "origin": origin,
-                "pivot_verification_status": "verified" if base.get("pivot_status") == "VERIFIED" and pivot else "unverified",
+                "origin_categories": sorted(source_types),
+                "market_surge_candidate": bool(market_surge_sources),
+                "is_current_open_position": "PORTFOLIO" in source_types,
+                "asset_class": metrics.get("asset_class") or "EQUITY",
+                "chart_evidence_status": "VERIFIED",
+                "scoring_evidence_version": "canslim_setup_evidence_v1",
+                "pivot_verification_status": pivot_status,
+                "pivot_structure_verification_status": "VERIFIED" if not [
+                    name for name in pivot_missing if name not in {"exact_pivot_price", "breakout_volume_confirmation"}
+                ] else "UNVERIFIED",
+                "pivot_gate_statuses": pivot_gate_statuses,
+                "exact_pivot_price": pivot,
+                "early_entry_verification_status": base.get("early_entry_verification_status") or "unverified",
+                "early_entry_price": base.get("early_entry_price"),
+                "breakout_volume_confirmation": base.get("breakout_volume_confirmation"),
                 "inside_buy_zone": distance is not None and 0 <= distance <= 5,
                 "extended": distance is not None and distance > 5,
-                "fundamental_quality_score": fundamental,
-                "relative_strength_group_score": rs_score,
-                "technical_setup_score": technical_score,
-                "accumulation_supply_score": accumulation,
-                "new_catalyst_score": catalyst,
+                "fundamental_quality_score": components["fundamental_quality"],
+                "relative_strength_group_score": components["relative_strength_group"],
+                "technical_setup_score": components["technical_setup"],
+                "accumulation_supply_score": components["accumulation_supply"],
+                "new_catalyst_score": components["new_catalyst"],
+                "available_dimensions": available_dimensions,
+                "missing_evidence": missing_evidence,
                 "source_labels": [item.get("label") for item in sources],
                 "source_evidence": [
                     {
@@ -274,23 +441,46 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                     }
                     for item in sources
                 ],
-                "company_name": (fmp.get("profile") or {}).get("company_name"),
-                "sector": (fmp.get("profile") or {}).get("sector"),
+                "company_name": profile.get("company_name"),
+                "sector": profile.get("sector"),
+                "industry": profile.get("industry"),
+                "market_cap": profile.get("market_cap"),
+                "quarterly_eps_growth_pct": quarterly.get("eps_growth_pct"),
+                "quarterly_sales_growth_pct": quarterly.get("revenue_growth_pct"),
+                "annual_eps_growth_pct": annual.get("annual_eps_growth_pct"),
+                "annual_positive_eps_growth_count": annual.get("three_year_positive_eps_growth_count"),
+                "annual_eps_growth_observations": annual.get("three_year_eps_growth_observations"),
+                "industry_group_rank": None,
+                "institutional_sponsorship_status": "UNAVAILABLE",
                 "current_price": current,
+                "sma21": metrics.get("sma21"),
+                "sma50": metrics.get("sma50"),
+                "sma200": metrics.get("sma200"),
                 "candidate_resistance": base.get("candidate_resistance"),
                 "candidate_resistance_distance_pct": base.get("candidate_resistance_distance_pct"),
                 "base_candidate_status": base.get("status") or "INSUFFICIENT_EVIDENCE",
                 "base_length_weeks": base.get("base_length_weeks"),
                 "base_depth_pct": base.get("base_depth_pct"),
-                "pivot_missing_evidence": [] if base.get("pivot_status") == "VERIFIED" and pivot else list(UNVERIFIED_PIVOT_GATES),
+                "pivot_missing_evidence": pivot_missing,
                 "pct_from_52w_high": metrics.get("pct_from_52w_high"),
                 "relative_volume": metrics.get("relative_volume"),
+                "up_down_volume_ratio_20": volume.get("up_down_volume_ratio_20"),
+                "accumulation_distribution_estimate": volume.get("accumulation_distribution_estimate"),
                 "volume_evidence_status": volume.get("status") or "INSUFFICIENT_EVIDENCE",
                 "average_dollar_volume": metrics.get("avg_dollar_volume_50"),
                 "quantitative_gate": metrics.get("quantitative_gate"),
                 "gate_reasons": metrics.get("gate_reasons") or [],
                 "rs_trend": relative.get("trend_21d"),
+                "rs_change_21d_pct": relative.get("change_21d_pct"),
+                "rs_new_high_52w": relative.get("new_high_52w"),
                 "earnings_date": earnings.get("earnings_date"),
+                "days_to_earnings": earnings.get("days_to_earnings"),
+                "earnings_status": earnings.get("earnings_status"),
+                "setup_pattern_state": (
+                    "TECHNICAL BASE CANDIDATE"
+                    if base.get("status") == "CANDIDATE_ONLY"
+                    else str(base.get("status") or "INSUFFICIENT EVIDENCE").replace("_", " ")
+                ),
             }
         chart_path = chart_dir / "charts" / f"{metrics.get('ticker')}_daily.png" if chart_dir else None
         if chart_path and chart_path.exists():
@@ -301,17 +491,29 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "sha256": sha256_file(chart_path),
             }
         candidates.append(candidate)
-        seen.add(str(metrics.get("ticker", "")).upper())
-    manifest_records = (chart_payload.get("source_manifest") or {}).get("records") or {}
-    for ticker in sorted(set(chart_payload.get("requested_tickers") or []) - seen):
+        seen.add(ticker)
+    requested = {str(value).upper() for value in chart_payload.get("requested_tickers") or []}
+    for ticker in sorted(requested - seen):
         sources = (manifest_records.get(ticker) or {}).get("sources") or []
-        source_types = {item.get("source_type") for item in sources}
+        source_types = {str(item.get("source_type")) for item in sources if item.get("source_type")}
         origin = "open_position" if "PORTFOLIO" in source_types else "watchlist" if "BRANDENS_WATCHLIST" in source_types else "scanner"
         candidates.append(
             {
                 "ticker": ticker,
                 "origin": origin,
+                "origin_categories": sorted(source_types),
+                "market_surge_candidate": any(item.get("source_type") in {"STANDARD_MARKETSURGE", "BRANDENS_WATCHLIST"} for item in sources),
+                "is_current_open_position": "PORTFOLIO" in source_types,
+                "asset_class": "FOREX" if "/" in ticker else "EQUITY",
+                "chart_evidence_status": "INSUFFICIENT_EVIDENCE",
+                "scoring_evidence_version": "canslim_setup_evidence_v1",
                 "pivot_verification_status": "unverified",
+                "pivot_structure_verification_status": "UNVERIFIED",
+                "pivot_gate_statuses": {name: None for name in UNVERIFIED_PIVOT_GATES if name not in {"exact_pivot_price", "breakout_volume_confirmation"}},
+                "exact_pivot_price": None,
+                "early_entry_verification_status": "unverified",
+                "early_entry_price": None,
+                "breakout_volume_confirmation": None,
                 "inside_buy_zone": False,
                 "extended": False,
                 "fundamental_quality_score": 0,
@@ -319,6 +521,15 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                 "technical_setup_score": 0,
                 "accumulation_supply_score": 0,
                 "new_catalyst_score": 0,
+                "available_dimensions": [],
+                "missing_evidence": [
+                    "current_session_chart_history",
+                    "C_A_fundamentals",
+                    "relative_strength_history",
+                    "volume_confirmation",
+                    "industry_group_rank",
+                    "institutional_sponsorship",
+                ],
                 "source_labels": [item.get("label") for item in sources],
                 "source_evidence": [
                     {
@@ -330,6 +541,7 @@ def derive_candidates_from_chart(chart_payload: dict[str, Any], chart_dir: Path 
                     for item in sources
                 ],
                 "base_candidate_status": "INSUFFICIENT_EVIDENCE",
+                "setup_pattern_state": "INSUFFICIENT EVIDENCE",
                 "pivot_missing_evidence": ["current_session_chart_history", *UNVERIFIED_PIVOT_GATES],
                 "chart_error": (chart_payload.get("errors") or {}).get(ticker),
             }
