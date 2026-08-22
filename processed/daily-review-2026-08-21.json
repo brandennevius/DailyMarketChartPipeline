@@ -1,0 +1,17 @@
+{
+  "audit_status": "failed",
+  "delivery": {
+    "artifact_url": null,
+    "error": null,
+    "failure_notice_step": "success",
+    "fallback_reason": "failure_notice_only_no_report_delivered",
+    "message_size_bytes": 402,
+    "review_delivery_step": "skipped",
+    "status": "FAILURE_NOTICE_SENT"
+  },
+  "manifest": "source-input/source-manifest.json",
+  "packet_hash": null,
+  "processed_at": "2026-08-22T03:24:23.530165+00:00",
+  "session_date": "2026-08-21",
+  "terminal": true
+}
