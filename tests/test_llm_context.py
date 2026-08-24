@@ -5,6 +5,8 @@ from pathlib import Path
 from market_chart_pipeline.cross_market import collect_fmp_cross_market_context
 from market_chart_pipeline.llm_context import (
     DEFAULT_MODEL,
+    MAX_OUTPUT_TOKENS,
+    OPENAI_REASONING_EFFORT,
     OUTPUT_JSON_SCHEMA,
     synthesize_cross_market_context,
     validate_frozen_synthesis,
@@ -141,7 +143,9 @@ def test_valid_synthesis_is_strict_frozen_and_hash_verified():
     assert captured["request"]["store"] is False
     assert "tools" not in captured["request"]
     assert "tool_choice" not in captured["request"]
-    assert "reasoning" not in captured["request"]
+    assert captured["request"]["reasoning"] == {"effort": OPENAI_REASONING_EFFORT}
+    assert captured["request"]["max_output_tokens"] == MAX_OUTPUT_TOKENS
+    assert MAX_OUTPUT_TOKENS >= 2000
     assert validate_frozen_synthesis(synthesis, context, regime) == synthesis
 
 
@@ -194,6 +198,41 @@ def test_openai_400_preserves_safe_error_details(monkeypatch):
         "message": "Invalid schema keyword: uniqueItems",
         "request_id": "req_safe_123",
     }
+
+
+def test_incomplete_openai_response_preserves_safe_status_details():
+    context, regime = _context_and_regime()
+
+    def requester(secret, request):
+        return {
+            "id": "resp_safe_123",
+            "status": "incomplete",
+            "model": "gpt-5-mini-2025-08-07",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 1000, "output_tokens": 900, "total_tokens": 1900},
+            "output": [],
+        }
+
+    synthesis = synthesize_cross_market_context(
+        SESSION,
+        context,
+        regime,
+        api_key="test-key",
+        requester=requester,
+        generated_at="2026-08-17T21:05:00Z",
+    )
+
+    assert synthesis["status"] == "INSUFFICIENT_EVIDENCE"
+    assert synthesis["reason_code"] == "OPENAI_RESPONSE_INCOMPLETE"
+    assert "incomplete" in synthesis["reason"].lower()
+    assert synthesis["response_diagnostic"] == {
+        "status": "incomplete",
+        "response_id": "resp_safe_123",
+        "resolved_model": "gpt-5-mini-2025-08-07",
+        "incomplete_details": {"reason": "max_output_tokens"},
+    }
+    assert synthesis["usage"]["output_tokens"] == 900
+    assert validate_frozen_synthesis(synthesis, context, regime) == synthesis
 
 
 def test_unknown_citation_is_rejected_to_visible_fallback():

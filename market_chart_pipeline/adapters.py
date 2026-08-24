@@ -60,9 +60,19 @@ def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) ->
         raise ValidationError("Portfolio snapshot prices are not from the review session")
 
     positions = []
+    computed_working_stop_downside = 0.0
+    computed_count = 0
     for item in snapshot.get("open_positions") or []:
         if str(item.get("side", "")).upper() != "LONG":
             continue
+        current_price = item.get("current_price")
+        current_stop = item.get("current_stop")
+        shares = item.get("shares")
+        current_downside = None
+        if current_price is not None and current_stop is not None and shares is not None:
+            current_downside = round(max((float(current_price) - float(current_stop)) * float(shares), 0.0), 2)
+            computed_working_stop_downside += current_downside
+            computed_count += 1
         positions.append(
             {
                 "ticker": item.get("ticker"),
@@ -82,7 +92,8 @@ def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) ->
                 "unrealized_pnl": item.get("unrealized_pnl"),
                 "open_r_multiple": item.get("open_r_multiple"),
                 "planned_risk_dollars": item.get("planned_risk_dollars"),
-                "remaining_risk_to_stop_dollars": item.get("remaining_risk_to_stop_dollars"),
+                "initial_risk_dollars": item.get("planned_risk_dollars") or item.get("initial_risk_dollars"),
+                "remaining_risk_to_stop_dollars": current_downside if current_downside is not None else item.get("remaining_risk_to_stop_dollars"),
                 "take_profit": item.get("take_profit"),
                 "setup": item.get("setup"),
                 "grade": item.get("grade"),
@@ -107,6 +118,16 @@ def normalize_portfolio_snapshot(snapshot: dict[str, Any], session_date: str) ->
         "portfolio_as_of": metadata.get("portfolio_data_as_of"),
         "price_source": metadata.get("price_source"),
     }
+    if computed_count == len(positions) and positions:
+        portfolio_risk["legacy_total_remaining_risk_to_stops"] = summary.get("total_remaining_risk_to_stops")
+        portfolio_risk["total_current_downside_to_working_stops"] = round(computed_working_stop_downside, 2)
+        portfolio_risk["total_remaining_risk_to_stops"] = round(computed_working_stop_downside, 2)
+        account_value = metadata.get("account_value")
+        portfolio_risk["total_current_downside_to_working_stops_pct"] = (
+            round((computed_working_stop_downside / float(account_value)) * 100.0, 4)
+            if account_value else None
+        )
+        portfolio_risk["total_remaining_risk_pct"] = portfolio_risk["total_current_downside_to_working_stops_pct"]
     return positions, portfolio_risk
 
 

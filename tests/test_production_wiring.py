@@ -1,4 +1,5 @@
 import json
+import re
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -366,7 +367,12 @@ def test_production_shaped_review_ranks_global_marketsurge_top10_and_preserves_f
     pdf_pages = PdfReader(result["pdf_path"]).pages
     page_text = [page.extract_text() or "" for page in pdf_pages]
     text = "\n".join(page_text)
-    assert len([value for value in page_text if "Top 10 CANSLIM Setups" in value]) == 2
+    candidate_page_counts = [
+        len(re.findall(r"#(?:[1-9]|10) WL\d{2}", value))
+        for value in page_text
+    ]
+    assert sum(candidate_page_counts) == 10
+    assert 1 not in [count for count in candidate_page_counts if count]
     assert all(item["ticker"] in text for item in top)
     assert "Brandens Watchlist - Complete Results" not in text
     assert "Visual Review Queue" not in text

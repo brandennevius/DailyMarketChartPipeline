@@ -18,7 +18,8 @@ SYNTHESIS_SCHEMA_VERSION = "cross_market_llm_synthesis_v2"
 OUTPUT_SCHEMA_VERSION = "cross_market_llm_output_v2"
 PROMPT_VERSION = "cross_market_synthesis_prompt_v2"
 MAX_INPUT_BYTES = 400_000
-MAX_OUTPUT_TOKENS = 900
+MAX_OUTPUT_TOKENS = 2400
+OPENAI_REASONING_EFFORT = "minimal"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 SYSTEM_INSTRUCTIONS = """You synthesize a completed-session cross-market brief from one frozen JSON evidence contract.
@@ -123,6 +124,30 @@ class OpenAIResponseError(RuntimeError):
         }
 
 
+class OpenAIIncompleteResponseError(SynthesisValidationError):
+    def __init__(self, response: dict[str, Any]) -> None:
+        self.response = response
+        status = _safe_optional_text(response.get("status"), 80) or "unknown"
+        details = response.get("incomplete_details")
+        reason = ""
+        if isinstance(details, dict) and details.get("reason"):
+            reason = f": {details['reason']}"
+        super().__init__(f"OpenAI response status was {status}{reason}")
+
+    def safe_details(self) -> dict[str, Any]:
+        details = self.response.get("incomplete_details")
+        return {
+            "status": _safe_optional_text(self.response.get("status"), 80),
+            "response_id": _safe_optional_text(self.response.get("id"), 120),
+            "resolved_model": _safe_optional_text(self.response.get("model"), 120),
+            "incomplete_details": _safe_json_object(details, 800) if isinstance(details, dict) else None,
+        }
+
+    def safe_usage(self) -> dict[str, Any] | None:
+        usage = self.response.get("usage")
+        return _safe_json_object(usage, 1200) if isinstance(usage, dict) else None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -135,6 +160,14 @@ def _safe_optional_text(value: Any, maximum: int) -> str | None:
     if value is None:
         return None
     return str(value).replace("\r", " ").replace("\n", " ").strip()[:maximum] or None
+
+
+def _safe_json_object(value: dict[str, Any], maximum: int) -> dict[str, Any]:
+    try:
+        parsed = json.loads(canonical_json(value)[:maximum])
+    except Exception:
+        return {"truncated": canonical_json(value)[:maximum]}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
 def _evidence_record(evidence_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -259,6 +292,7 @@ def build_request_contract(input_contract: dict[str, Any], model: str) -> dict[s
     api_request = {
         "model": model,
         "store": False,
+        "reasoning": {"effort": OPENAI_REASONING_EFFORT},
         "max_output_tokens": MAX_OUTPUT_TOKENS,
         "instructions": SYSTEM_INSTRUCTIONS,
         "input": [
@@ -277,10 +311,12 @@ def build_request_contract(input_contract: dict[str, Any], model: str) -> dict[s
         },
     }
     return {
-        "schema_version": "openai_responses_request_v2",
+        "schema_version": "openai_responses_request_v3",
         "provider": "OpenAI",
         "endpoint": "v1/responses",
         "model": model,
+        "reasoning_effort": OPENAI_REASONING_EFFORT,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
         "prompt_version": PROMPT_VERSION,
         "output_schema_version": OUTPUT_SCHEMA_VERSION,
         "input_sha256": input_sha256,
@@ -290,7 +326,7 @@ def build_request_contract(input_contract: dict[str, Any], model: str) -> dict[s
 
 def _extract_output_text(response: dict[str, Any]) -> str:
     if response.get("status") != "completed":
-        raise SynthesisValidationError("OpenAI response did not complete")
+        raise OpenAIIncompleteResponseError(response)
     for item in response.get("output") or []:
         if item.get("type") != "message":
             continue
@@ -420,6 +456,8 @@ def _fallback(
     reason_code: str,
     reason: str,
     api_error: dict[str, Any] | None = None,
+    response_diagnostic: dict[str, Any] | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = {
         "session_date": session_date,
@@ -444,7 +482,8 @@ def _fallback(
         "reason_code": reason_code,
         "reason": reason,
         "api_error": api_error,
-        "usage": None,
+        "response_diagnostic": response_diagnostic,
+        "usage": usage,
         "interpretation": {
             "decision_influence": "INTERPRETATION_ONLY",
             "may_override_deterministic_outputs": False,
@@ -586,12 +625,22 @@ def synthesize_cross_market_context(
         return synthesis
     except Exception as exc:
         api_error = exc.safe_details() if isinstance(exc, OpenAIResponseError) else None
+        response_diagnostic = exc.safe_details() if isinstance(exc, OpenAIIncompleteResponseError) else None
+        usage = exc.safe_usage() if isinstance(exc, OpenAIIncompleteResponseError) else None
         return _fallback(
             session_date=session_date,
             model=selected_model,
             request_contract=request_contract,
             generated_at=timestamp,
-            reason_code="OPENAI_API_ERROR" if api_error else "LLM_SYNTHESIS_VALIDATION_FAILED",
+            reason_code=(
+                "OPENAI_API_ERROR"
+                if api_error
+                else "OPENAI_RESPONSE_INCOMPLETE"
+                if response_diagnostic
+                else "LLM_SYNTHESIS_VALIDATION_FAILED"
+            ),
             reason=_safe_error(exc),
             api_error=api_error,
+            response_diagnostic=response_diagnostic,
+            usage=usage,
         )

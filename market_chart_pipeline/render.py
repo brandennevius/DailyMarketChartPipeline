@@ -91,6 +91,47 @@ def _event(result: dict[str, Any], rule: str) -> dict[str, Any]:
     return next((item for item in result.get("events", []) if item.get("rule") == rule), {})
 
 
+def _position_gain_pct(result: dict[str, Any]) -> float | None:
+    if result.get("gain_pct") is not None:
+        return float(result["gain_pct"])
+    snap = result.get("position_snapshot", {})
+    entry = snap.get("entry_price")
+    current = snap.get("current_price")
+    if entry in {None, 0} or current is None:
+        return None
+    return ((float(current) - float(entry)) / float(entry)) * 100.0
+
+
+def _policy_stop(result: dict[str, Any]) -> Any:
+    hard = _event(result, "hard_capital_protection")
+    values = hard.get("values") or {}
+    return values.get("effective_stop") if values.get("effective_stop") is not None else (result.get("position_snapshot") or {}).get("stop_price")
+
+
+def _working_stop(result: dict[str, Any]) -> Any:
+    return (result.get("position_snapshot") or {}).get("stop_price")
+
+
+def _current_downside_to_stop(result: dict[str, Any], stop_value: Any) -> float | None:
+    snap = result.get("position_snapshot", {})
+    current = snap.get("current_price")
+    shares = snap.get("shares")
+    if current is None or shares is None or stop_value is None:
+        return None
+    return round(max((float(current) - float(stop_value)) * float(shares), 0.0), 2)
+
+
+def _total_current_downside(results: list[dict[str, Any]], *, stop_kind: str) -> float | None:
+    total = 0.0
+    for result in results:
+        stop = _policy_stop(result) if stop_kind == "policy" else _working_stop(result)
+        value = _current_downside_to_stop(result, stop)
+        if value is None:
+            return None
+        total += value
+    return round(total, 2)
+
+
 def _headline(packet: dict[str, Any]) -> str:
     results = packet.get("sell_rule_results", [])
     exits = [item["ticker"] for item in results if item.get("action") == "EXIT"]
@@ -166,6 +207,11 @@ def render_markdown(packet: dict[str, Any]) -> str:
     regime = packet.get("market_regime", {})
     cross_market = packet.get("cross_market_context", {})
     synthesis = cross_market.get("llm_synthesis") or {}
+    results = packet.get("sell_rule_results", [])
+    working_downside = risk.get("total_current_downside_to_working_stops")
+    if working_downside is None:
+        working_downside = _total_current_downside(results, stop_kind="working")
+    policy_downside = _total_current_downside(results, stop_kind="policy")
     lines = [
         f"# Daily Market & Portfolio Review - {packet['session_date']}",
         "",
@@ -173,7 +219,8 @@ def render_markdown(packet: dict[str, Any]) -> str:
         f"- {_headline(packet)}",
         "- BUY NOW and EARLY ENTRY require a verified algorithmic pivot plus breakout-volume, leadership, earnings-risk, and market-permission gates; an unverified algorithmic candidate is never actionable.",
         f"- Account value: {_money(risk.get('account_value'))}; gross exposure: {_pct(risk.get('gross_exposure_pct'))}; open P&L: {_money(risk.get('total_open_pnl'))}.",
-        f"- Remaining risk to stops: {_money(risk.get('total_remaining_risk_to_stops'))} ({_pct(risk.get('total_remaining_risk_pct'))} of equity).",
+        f"- Current downside to working stops: {_money(working_downside)} ({_pct(risk.get('total_current_downside_to_working_stops_pct') if risk.get('total_current_downside_to_working_stops_pct') is not None else risk.get('total_remaining_risk_pct'))} of equity).",
+        f"- Current downside to effective policy stops: {_money(policy_downside)}. Policy stops are read-only sell-rule overlays; they do not mutate broker orders.",
         "",
         "## Market And Leadership Breadth",
         f"- Dashboard Gauge posture: {regime.get('dashboard_market_gauge_posture') or 'unavailable'} (score {_number(regime.get('dashboard_market_gauge_score'))}; generated {regime.get('dashboard_market_gauge_generated_at') or 'unavailable'}).",
@@ -244,6 +291,16 @@ def render_markdown(packet: dict[str, Any]) -> str:
                     ]
                     if synthesis.get("api_error") else []
                 ),
+                *(
+                    [
+                        "- Safe response diagnostic: "
+                        f"status {(synthesis.get('response_diagnostic') or {}).get('status') or '-'}; "
+                        f"reason {((synthesis.get('response_diagnostic') or {}).get('incomplete_details') or {}).get('reason') or '-'}; "
+                        f"response ID {(synthesis.get('response_diagnostic') or {}).get('response_id') or '-'}; "
+                        f"model {(synthesis.get('response_diagnostic') or {}).get('resolved_model') or '-'}."
+                    ]
+                    if synthesis.get("response_diagnostic") else []
+                ),
             ]
         )
     lines.extend(["", "### Frozen Evidence and Provenance"])
@@ -265,12 +322,12 @@ def render_markdown(packet: dict[str, Any]) -> str:
     if cross_market.get("evidence_gaps"):
         lines.append(f"- Insufficient evidence: {'; '.join(cross_market['evidence_gaps'])}.")
     lines.extend(["", "## Portfolio Actions"])
-    for result in packet.get("sell_rule_results", []):
+    for result in results:
         snap = result.get("position_snapshot", {})
         lines.append(
-            f"- **{result['ticker']} - {result['action']}**: return {_pct(result.get('gain_pct'))}, "
-            f"open R {_number(snap.get('open_r_multiple'))}, stop {_money(snap.get('stop_price'), 2)}, "
-            f"target {_money(snap.get('take_profit'), 2)}. {result['rationale']}"
+            f"- **{result['ticker']} - {result['action']}**: return {_pct(_position_gain_pct(result))}, "
+            f"open R {_number(snap.get('open_r_multiple'))}, policy stop {_money(_policy_stop(result), 2)}, working stop {_money(_working_stop(result), 2)}, "
+            f"target {_money(snap.get('take_profit'), 2)}. {result['rationale']} {_position_narrative(result)}"
         )
     top_setups = _top_setups(packet)
     universe = packet.get("candidate_universe_audit") or {}
@@ -364,7 +421,15 @@ def _position_narrative(result: dict[str, Any]) -> str:
     snap = result.get("position_snapshot", {})
     notes = []
     if result.get("action") == "REPAIR":
-        notes.append("Do not add while below entry; preserve the working stop and reassess relative strength.")
+        policy_stop = _policy_stop(result)
+        working_stop = _working_stop(result)
+        if policy_stop is not None and working_stop is not None and float(policy_stop) > float(working_stop):
+            notes.append(
+                f"Do not add while below entry; tighten or replace the working stop {_money(working_stop, 2)} "
+                f"with the effective policy stop {_money(policy_stop, 2)} as a read-only repair recommendation."
+            )
+        else:
+            notes.append("Do not add while below entry; repair the stop plan and reassess relative strength.")
     elif result.get("action") == "HOLD":
         notes.append("Hold while the working stop remains intact; no deterministic sell trigger fired.")
     elif result.get("action") == "REDUCE":
@@ -426,17 +491,26 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     )
     summary.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), bg), ("TEXTCOLOR", (0, 0), (0, 0), fg), ("BOX", (0, 0), (-1, -1), 0.8, fg), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
     story.extend([summary, Spacer(1, 10), _p("Portfolio at a glance", styles["h1"])])
+    working_downside = risk.get("total_current_downside_to_working_stops")
+    if working_downside is None:
+        working_downside = _total_current_downside(results, stop_kind="working")
+    policy_downside = _total_current_downside(results, stop_kind="policy")
     metrics = [
-        ["Account value", "Gross exposure", "Open P&L", "Risk to stops", "Long positions"],
-        [_money(risk.get("account_value")), _pct(risk.get("gross_exposure_pct")), _money(risk.get("total_open_pnl")), f"{_money(risk.get('total_remaining_risk_to_stops'))} / {_pct(risk.get('total_remaining_risk_pct'))}", str(risk.get("normalized_long_position_count", len(results)))],
+        ["Account value", "Gross exposure", "Open P&L", "Working-stop downside", "Policy-stop downside"],
+        [_money(risk.get("account_value")), _pct(risk.get("gross_exposure_pct")), _money(risk.get("total_open_pnl")), f"{_money(working_downside)} / {_pct(risk.get('total_current_downside_to_working_stops_pct') if risk.get('total_current_downside_to_working_stops_pct') is not None else risk.get('total_remaining_risk_pct'))}", _money(policy_downside)],
     ]
     story.append(_table(metrics, [1.35 * inch] * 5, styles, {0, 1, 2, 3, 4}))
+    story.append(_p(
+        "Working-stop downside is calculated from current close, current broker/snapshot working stop, and current shares. "
+        "Policy-stop downside is the read-only rule-engine downside after tighter capital-protection overlays; breached policy stops are floored at $0 downside and shown as actions.",
+        styles["small"],
+    ))
     story.extend([Spacer(1, 10), _p("Action board", styles["h1"])])
-    action_rows = [["Ticker", "Action", "Return", "Open R", "Stop", "Target", "Why now"]]
+    action_rows = [["Ticker", "Action", "Return", "Open R", "Policy stop", "Working stop", "Why now"]]
     for result in results:
         snap = result.get("position_snapshot", {})
-        action_rows.append([result["ticker"], result["action"], _pct(result.get("gain_pct")), _number(snap.get("open_r_multiple")), _money(snap.get("stop_price"), 2), _money(snap.get("take_profit"), 2), result.get("rationale", "")])
-    story.append(_table(action_rows, [0.55 * inch, 0.65 * inch, 0.58 * inch, 0.48 * inch, 0.65 * inch, 0.7 * inch, 2.95 * inch], styles, {2, 3, 4, 5}))
+        action_rows.append([result["ticker"], result["action"], _pct(_position_gain_pct(result)), _number(snap.get("open_r_multiple")), _money(_policy_stop(result), 2), _money(_working_stop(result), 2), result.get("rationale", "")])
+    story.append(_table(action_rows, [0.55 * inch, 0.65 * inch, 0.58 * inch, 0.48 * inch, 0.72 * inch, 0.72 * inch, 2.75 * inch], styles, {2, 3, 4, 5}))
     story.extend([Spacer(1, 10), _p("Market and leadership evidence", styles["h1"])])
     posture = regime.get("dashboard_market_gauge_posture") or "unavailable"
     story.append(_p(f"Dashboard Gauge posture: {posture} (score {_number(regime.get('dashboard_market_gauge_score'))}; generated {regime.get('dashboard_market_gauge_generated_at') or 'unavailable'}). This is exact-session trend and extension evidence, not an O'Neil regime classification.", styles["body"]))
@@ -511,6 +585,15 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
                 f"message {api_error.get('message') or '-'}; request ID {api_error.get('request_id') or '-'}.",
                 styles["small"],
             ))
+        if synthesis.get("response_diagnostic"):
+            diagnostic = synthesis["response_diagnostic"]
+            incomplete = diagnostic.get("incomplete_details") or {}
+            story.append(_p(
+                f"Safe response diagnostic: status {diagnostic.get('status') or '-'}; "
+                f"reason {incomplete.get('reason') or '-'}; response ID {diagnostic.get('response_id') or '-'}; "
+                f"model {diagnostic.get('resolved_model') or '-'}.",
+                styles["small"],
+            ))
     story.append(_p("Frozen evidence and provenance", styles["h2"]))
     for article in (cross_market.get("cited_context") or [])[:8]:
         suffix = f" - {article.get('publisher') or 'publisher unavailable'}, {article.get('published_at') or 'time unavailable'} [{str(article.get('category') or '').upper()}]"
@@ -531,21 +614,25 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
 
     story.append(PageBreak())
     story.append(_p("Position Review", styles["title"]))
-    story.append(_p("Working stops come from the portfolio snapshot. Rule-engine stops may be tighter when the 8% or 2-ATR policy requires it.", styles["subtitle"]))
+    story.append(_p(
+        "Policy stops are read-only rule-engine decision stops; working stops come from the portfolio snapshot/broker order state. "
+        "Portfolio risk arithmetic uses current downside to working stops unless explicitly labeled policy-stop risk.",
+        styles["subtitle"],
+    ))
     for index, result in enumerate(results):
         snap = result.get("position_snapshot", {})
         bg, fg = _action_color(result.get("action", "HOLD"))
         header = Table(
-            [[_p(f"{result['ticker']}  |  {result['action']}", styles["h2"]), _p(f"{_pct(result.get('gain_pct'))}  |  {_number(snap.get('open_r_multiple'))}R", styles["badge"]) ]],
+            [[_p(f"{result['ticker']}  |  {result['action']}", styles["h2"]), _p(f"{_pct(_position_gain_pct(result))}  |  {_number(snap.get('open_r_multiple'))}R", styles["badge"]) ]],
             colWidths=[5.35 * inch, 1.45 * inch],
         )
         header.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), bg), ("TEXTCOLOR", (1, 0), (1, 0), fg), ("BOX", (0, 0), (-1, -1), 0.6, fg), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7)]))
         story.extend([header, Spacer(1, 5)])
         detail_rows = [
-            ["Entry", "Close", "Shares", "Value", "Weight", "Stop", "Risk $", "Target", "Grade"],
-            [_money(snap.get("entry_price"), 2), _money(snap.get("current_price"), 2), _number(snap.get("shares"), 0), _money(snap.get("market_value")), _pct(snap.get("position_weight_pct")), _money(snap.get("stop_price"), 2), _money(snap.get("remaining_risk_to_stop_dollars")), _money(snap.get("take_profit"), 2), snap.get("grade") or "-"],
+            ["Entry", "Close", "Shares", "Value", "Weight", "Policy stop", "Working stop", "Risk $", "Grade"],
+            [_money(snap.get("entry_price"), 2), _money(snap.get("current_price"), 2), _number(snap.get("shares"), 0), _money(snap.get("market_value")), _pct(snap.get("position_weight_pct")), _money(_policy_stop(result), 2), _money(_working_stop(result), 2), _money(snap.get("remaining_risk_to_stop_dollars")), snap.get("grade") or "-"],
         ]
-        story.append(_table(detail_rows, [0.73 * inch, 0.73 * inch, 0.55 * inch, 0.75 * inch, 0.65 * inch, 0.7 * inch, 0.65 * inch, 0.73 * inch, 0.55 * inch], styles, set(range(8))))
+        story.append(_table(detail_rows, [0.72 * inch, 0.72 * inch, 0.52 * inch, 0.73 * inch, 0.62 * inch, 0.78 * inch, 0.78 * inch, 0.58 * inch, 0.5 * inch], styles, set(range(8))))
         story.extend([Spacer(1, 5), _p(_position_narrative(result), styles["body"])])
         hard = _event(result, "hard_capital_protection")
         if hard:
@@ -589,10 +676,6 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
             styles["body"],
         ))
     for index, item in enumerate(top_setups):
-        if index and index % 5 == 0:
-            story.append(PageBreak())
-            story.append(Spacer(1, 5))
-            story.append(_p("Top 10 CANSLIM Setups (continued)", styles["title"]))
         snap = item.get("snapshot") or {}
         pivot_text = (
             f"VERIFIED ALGORITHMIC PIVOT {_money(snap.get('exact_pivot_price'), 2)}"
@@ -667,7 +750,7 @@ def render_pdf(packet: dict[str, Any], chart_dir: Path | None = None, report_dir
     verified_count = len(packet.get("chart_verification", {}).get("verified_tickers", []))
     requested_count = len(packet.get("chart_verification", {}).get("requested_tickers", []))
     evidence_lines = [
-        f"Portfolio snapshot matched the {session} session and contained current closing prices and broker working stops.",
+        f"Portfolio snapshot matched the {session} session and contained current closing prices and broker working stops; report risk arithmetic uses current downside to those working stops, while policy stops are read-only decision overlays.",
         f"{verified_count} of {requested_count} requested symbols had current-session daily and weekly chart records.",
         f"{sum(1 for item in results if item.get('position_snapshot', {}).get('sell_sandbox_status') == 'verified')} of {len(results)} open long positions had hash-verified sell-rule sandbox charts.",
         f"MarketSurge audit retained {universe.get('distinct_manifest_ticker_count', 0)} distinct manifest tickers and {universe.get('valid_manifest_equity_count', 0)} valid equities; excluded {universe.get('open_position_exclusion_count', 0)} open positions and {universe.get('non_equity_exclusion_count', 0)} non-equities from new-entry ranking.",

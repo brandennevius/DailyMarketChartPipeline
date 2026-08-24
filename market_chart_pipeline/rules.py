@@ -25,7 +25,7 @@ CANDIDATE_ACTION_NON_EQUITY = "EXCLUDED - NON-EQUITY"
 _POSITION_SNAPSHOT_FIELDS = (
     "company_name", "sector", "entry_price", "entry_date", "current_price", "shares",
     "market_value", "position_weight_pct", "unrealized_pnl", "open_r_multiple",
-    "stop_price", "remaining_risk_to_stop_dollars", "take_profit", "setup", "grade",
+    "stop_price", "remaining_risk_to_stop_dollars", "initial_risk_dollars", "take_profit", "setup", "grade",
     "setup_criteria_score", "setup_criteria_max", "earnings_date", "sma21", "sma50",
     "sma200", "pct_from_sma50", "pct_from_52w_high", "relative_strength_trend",
     "accumulation_distribution", "chart_gate", "chart_gate_reasons", "daily_chart_asset",
@@ -611,6 +611,20 @@ def score_candidate(
         classification = "EARLY_ENTRY"
         action = CANDIDATE_ACTION_EARLY
         rationale = "All verified early-entry, volume, C/A, leadership, sponsorship, earnings-risk and market-permission gates pass."
+    elif (
+        candidate.get("pivot_verification_status") == "verified"
+        and candidate.get("pivot_structure_verification_status") == "VERIFIED"
+        and candidate.get("base_candidate_status") == "VERIFIED_ALGORITHMIC_PIVOT"
+        and candidate.get("breakout_status") == "CONFIRMED"
+        and candidate.get("inside_buy_zone") is True
+        and market_permission["status"] != "PERMITTED"
+    ):
+        classification = "WAIT_FOR_CONFIRMATION"
+        action = CANDIDATE_ACTION_WAIT
+        rationale = (
+            "The verified algorithmic pivot breakout is inside the buy zone, but buying-permissive market permission "
+            f"is not verified ({market_permission['status']}); wait for market permission before acting."
+        )
     elif candidate.get("extended") is True:
         classification = "WAIT_FOR_CONFIRMATION"
         action = CANDIDATE_ACTION_WAIT

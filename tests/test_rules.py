@@ -320,6 +320,46 @@ def test_buy_now_requires_every_verified_entry_and_market_gate():
     assert unverified["action"] != "BUY NOW"
 
 
+def test_confirmed_breakout_inside_buy_zone_waits_for_market_permission_not_building():
+    policy = load_policy()
+    candidate = _rankable_candidate("RELY", score=90)
+    candidate.update(
+        {
+            "pivot_verification_status": "verified",
+            "pivot_structure_verification_status": "VERIFIED",
+            "base_candidate_status": "VERIFIED_ALGORITHMIC_PIVOT",
+            "pattern_algorithm_version": "oneil_style_ohlcv_patterns_v1",
+            "pattern_policy_version": "oneil_style_pattern_policy_v1",
+            "pivot_gate_statuses": {
+                "prior_uptrend": "PASS",
+                "base_duration": "PASS",
+                "base_depth": "PASS",
+                "weekly_structure": "PASS",
+                "volume_contraction": "PASS",
+            },
+            "breakout_status": "CONFIRMED",
+            "exact_pivot_price": 25.85,
+            "inside_buy_zone": True,
+            "candidate_resistance_distance_pct": 3.2,
+            "breakout_volume_confirmation": True,
+            "breakout_volume_ratio_50d": 2.28,
+            "industry_group_rank": 5,
+            "institutional_sponsorship_status": "VERIFIED_SUPPORTIVE",
+            "earnings_status": "VERIFIED",
+            "days_to_earnings": 20,
+            "pivot_missing_evidence": [],
+        }
+    )
+
+    result = score_candidate(candidate, policy, {"classification": "INSUFFICIENT_EVIDENCE", "dashboard_market_gauge_posture": "Neutral"})
+
+    assert result["action"] == "WAIT FOR CONFIRMATION"
+    assert result["classification"] == "WAIT_FOR_CONFIRMATION"
+    assert "market permission" in result["rationale"].lower()
+    assert "building" not in result["rationale"].lower()
+    assert "buying_permissive_market_regime" in result["missing_evidence"]
+
+
 def test_failed_or_price_only_breakout_waits_instead_of_recycling_to_near_pivot():
     policy = load_policy()
     common = _rankable_candidate("FAIL", score=90)

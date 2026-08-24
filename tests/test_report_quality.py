@@ -1,7 +1,9 @@
 from io import BytesIO
 from pathlib import Path
+import re
 
 import pytest
+from pypdf import PdfReader
 
 from market_chart_pipeline.adapters import derive_market_breadth, enrich_positions_from_charts, normalize_portfolio_snapshot
 from market_chart_pipeline.core import ValidationError
@@ -57,7 +59,9 @@ def test_portfolio_adapter_preserves_decision_metrics():
     assert positions[0]["take_profit"] == 125
     assert positions[0]["grade"] == "A"
     assert risk["total_open_pnl"] == 450
-    assert risk["total_remaining_risk_to_stops"] == 300
+    assert risk["legacy_total_remaining_risk_to_stops"] == 300
+    assert risk["total_current_downside_to_working_stops"] == 80
+    assert risk["total_remaining_risk_to_stops"] == 80
     assert risk["price_source"] == "closing-feed"
 
 
@@ -233,10 +237,98 @@ def test_top10_replaces_duplicate_lists_and_position_failure_page_is_preserved(t
     assert "Brandens Watchlist - Complete Results" not in text
     assert "Visual Review Queue" not in text
     assert "First Charts to Review" not in text
+    candidate_page_counts = [
+        len(re.findall(r"#(?:[1-9]|10) W\d{2}", page.extract_text() or ""))
+        for page in PdfReader(str(pdf_path)).pages
+    ]
+    populated_candidate_pages = [count for count in candidate_page_counts if count]
+    assert 1 not in populated_candidate_pages
 
     packet["audit_profile"] = "strict-core"
     with pytest.raises(ValidationError, match="requires a hash-locked algorithmic pattern chart"):
         render_pdf(packet, report_dir=tmp_path)
+
+
+def test_position_report_distinguishes_policy_stop_working_stop_and_current_downside():
+    packet = {
+        "session_date": SESSION,
+        "policy_version": "test-policy",
+        "packet_sha256": "a" * 64,
+        "audit_profile": "standard",
+        "market_regime": {"classification": "INSUFFICIENT_EVIDENCE"},
+        "market_breadth": {"verified_symbols": 0},
+        "portfolio_risk": {
+            "account_value": 100_000,
+            "gross_exposure_pct": 5,
+            "total_open_pnl": 10,
+            "total_current_downside_to_working_stops": 16.72,
+            "total_current_downside_to_working_stops_pct": 0.0167,
+            "normalized_long_position_count": 1,
+        },
+        "sell_rule_results": [
+            {
+                "ticker": "HPE",
+                "action": "EXIT",
+                "rationale": "Hard capital-protection stop was violated.",
+                "events": [{
+                    "rule": "hard_capital_protection",
+                    "status": "TRIGGERED",
+                    "values": {"current_price": 53.45, "effective_stop": 54.79, "structural_stop": 51.36},
+                }],
+                "position_snapshot": {
+                    "entry_price": 54.79,
+                    "current_price": 53.45,
+                    "shares": 8,
+                    "market_value": 427.6,
+                    "position_weight_pct": 0.06,
+                    "stop_price": 51.36,
+                    "remaining_risk_to_stop_dollars": 16.72,
+                    "sell_sandbox_status": "insufficient_evidence",
+                    "sell_sandbox_error": "Fixture intentionally omits chart.",
+                },
+            },
+            {
+                "ticker": "ZBRA",
+                "action": "REPAIR",
+                "rationale": "Working stop is wider than the policy cap.",
+                "gain_pct": -0.13,
+                "events": [{
+                    "rule": "hard_capital_protection",
+                    "status": "PASS",
+                    "values": {"current_price": 368.51, "effective_stop": 339.48, "structural_stop": 332},
+                }],
+                "position_snapshot": {
+                    "entry_price": 369,
+                    "current_price": 368.51,
+                    "shares": 5,
+                    "market_value": 1842.55,
+                    "position_weight_pct": 0.26,
+                    "stop_price": 332,
+                    "remaining_risk_to_stop_dollars": 182.55,
+                    "sell_sandbox_status": "insufficient_evidence",
+                    "sell_sandbox_error": "Fixture intentionally omits chart.",
+                },
+            },
+        ],
+        "candidate_results": [],
+        "top_canslim_setups": [],
+        "candidate_universe_audit": {},
+        "chart_verification": {"verified_tickers": [], "requested_tickers": []},
+        "input_sets": {"portfolio_tickers": ["HPE", "ZBRA"]},
+    }
+
+    markdown = render_markdown(packet)
+    assert "Current downside to working stops: $17" in markdown
+    assert "policy stop $54.79, working stop $51.36" in markdown
+    assert "tighten or replace the working stop $332.00 with the effective policy stop $339.48" in markdown
+
+    pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(render_pdf(packet))).pages)
+    assert "Working-stop downside" in pdf_text
+    assert "$17 / +0.0%" in pdf_text
+    assert "Policy stop" in pdf_text and "$54.79" in pdf_text
+    assert "Working stop" in pdf_text and "$51.36" in pdf_text
+    assert "-2.4%" in pdf_text or "-2.45%" in pdf_text
+    assert "tighten or replace the working stop $332.00 with the effective policy stop $339.48" in pdf_text
 
 
 def test_report_separates_gauge_oneil_exposure_and_cited_cross_market_context():
