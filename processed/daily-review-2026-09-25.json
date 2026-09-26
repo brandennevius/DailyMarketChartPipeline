@@ -1,0 +1,17 @@
+{
+  "audit_status": "failed",
+  "delivery": {
+    "artifact_url": null,
+    "error": "(535, b'5.7.8 Username and Password not accepted. For more information, go to\\n5.7.8  https://support.google.com/mail/?p=BadCredentials 5a478bee46e88-34144b4ae50sm12018004eec.17 - gsmtp')",
+    "failure_notice_step": "failure",
+    "fallback_reason": null,
+    "message_size_bytes": null,
+    "review_delivery_step": "skipped",
+    "status": "FAILED"
+  },
+  "manifest": "source-input/source-manifest.json",
+  "packet_hash": null,
+  "processed_at": "2026-09-26T07:59:07.780222+00:00",
+  "session_date": "2026-09-25",
+  "terminal": true
+}
