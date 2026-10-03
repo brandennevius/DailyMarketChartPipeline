@@ -1,0 +1,17 @@
+{
+  "audit_status": "failed",
+  "delivery": {
+    "artifact_url": null,
+    "error": "Connection unexpectedly closed",
+    "failure_notice_step": "failure",
+    "fallback_reason": null,
+    "message_size_bytes": null,
+    "review_delivery_step": "skipped",
+    "status": "FAILED"
+  },
+  "manifest": "source-input/source-manifest.json",
+  "packet_hash": null,
+  "processed_at": "2026-10-03T08:30:08.710497+00:00",
+  "session_date": "2026-10-02",
+  "terminal": true
+}
