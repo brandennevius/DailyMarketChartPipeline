@@ -54,10 +54,6 @@ on:
         required: false
         default: false
         type: boolean
-  schedule:
-    # Source snapshots and the MarketSurge scan arrive after the close. This is
-    # 10:30 PM EDT / 9:30 PM EST; exact-session validation still gates the run.
-    - cron: '30 2 * * 2-6'
 
 permissions:
   actions: read
