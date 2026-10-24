@@ -222,21 +222,3 @@ def test_artifact_metadata_hashes_exact_registered_bytes(tmp_path):
     metadata = _artifact_metadata("json", path, "application/json")
     assert metadata["size_bytes"] == path.stat().st_size
     assert len(metadata["sha256"]) == 64
-
-
-def test_daily_review_workflow_exposes_exact_non_secret_dashboard_contract():
-    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "daily-review.yml").read_text()
-    for name in (
-        "review_run_id",
-        "attempt",
-        "marketsurge_pdf_sha256",
-        "snapshot_json_sha256",
-        "snapshot_markdown_sha256",
-        "market_gauge_json_sha256",
-        "worker_input_url",
-        "worker_callback_url",
-    ):
-        assert f"{name}:" in workflow
-    assert "DASHBOARD_WORKER_SECRET: ${{ secrets.DASHBOARD_WORKER_SECRET }}" in workflow
-    assert "DASHBOARD_BASE_URL: ${{ vars.DASHBOARD_BASE_URL }}" in workflow
-    assert "daily-review-{run_id}-attempt-{attempt}.json" in workflow

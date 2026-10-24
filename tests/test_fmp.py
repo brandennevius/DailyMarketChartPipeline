@@ -196,9 +196,8 @@ def test_fmp_is_only_required_history_secret(monkeypatch):
     monkeypatch.setattr(fmp.requests, "get", lambda *a, **k: Response(200, history_rows()))
     assert not historical_eod("AAPL", "2025-08-17", SESSION).empty
     workflow = Path(".github/workflows/chart-packet.yml").read_text()
-    daily = Path(".github/workflows/daily-review.yml").read_text()
-    assert "ALPACA_API" not in workflow + daily
-    assert "FMP_API_KEY" in workflow and "FMP_API_KEY" in daily
+    assert "ALPACA_API" not in workflow
+    assert "FMP_API_KEY" in workflow
 
 
 def test_rs_line_is_rebased_to_100():

@@ -1,10 +1,18 @@
 # Daily Market Chart Pipeline
 
-Standalone post-close chart packet generator for the Daily Market & Portfolio Review.
+Standalone post-close chart packet generator.
 
 ## Purpose
 
-This repository is intentionally separate from TradingDashboard. It accepts a current-session ticker manifest, retrieves bounded historical daily OHLCV from FMP, validates exact-session freshness, calculates technical metrics, generates daily and weekly charts, and produces a PDF/JSON chart packet for the scheduled market review.
+This repository is intentionally separate from TradingDashboard. It accepts a current-session ticker manifest, retrieves bounded historical daily OHLCV from FMP, validates exact-session freshness, calculates technical metrics, generates daily and weekly charts, and produces a PDF/JSON chart packet.
+
+## Retired market-review workflow
+
+The MarketSurge-based Daily Market & Portfolio Review job was retired on
+2026-10-24, together with its TradingDashboard page and worker endpoints.
+The `daily-review.yml` workflow has been removed. Existing processed receipts,
+Python review code, and historical documentation remain for reference.
+The separate **Build Market Chart Packet** workflow is unchanged.
 
 ## Required GitHub Actions secrets
 
@@ -26,10 +34,9 @@ Optional email delivery secrets:
 - `CHART_PACKET_RECIPIENT` (defaults to `GMAIL_ADDRESS`)
 - `DAILY_REVIEW_RECIPIENT` (defaults to `CHART_PACKET_RECIPIENT`)
 
-`GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are required by the production Daily
-Market & Portfolio Review workflow because it acquires the exact-session
-portfolio snapshot and MarketSurge scan from Gmail before running strict
-validation.
+`GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are required when the chart-packet
+workflow sends email. Review-specific configuration above applies only to
+retained local review commands, not an active GitHub review job.
 
 ## Manual run
 
@@ -84,7 +91,7 @@ proprietary MarketSurge/IBD pattern recognition.
 ## Deterministic daily review
 
 See [docs/daily-review.md](docs/daily-review.md) for the versioned policy,
-strict source/audit path, local command, and exact workflow replay command.
+strict source/audit path, retained local commands, and historical workflow notes.
 The review PDF is decision-first: portfolio exposure and risk, an action board,
 per-position stop/target context with current charts, a global `Top 10 CANSLIM
 Setups` ranking from every distinct valid equity in the frozen MarketSurge PDF,

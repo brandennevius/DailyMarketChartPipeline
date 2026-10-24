@@ -1,4 +1,10 @@
-# Daily Market & Portfolio Review
+# Daily Market & Portfolio Review (retired automation)
+
+> **Retired on 2026-10-24:** the MarketSurge review workflow and its
+> TradingDashboard page/API have been removed. The workflow dispatch, schedule,
+> and callback instructions below are historical and must not be used as current
+> operating instructions. The Python commands and processed receipts are retained
+> for offline reference; the separate chart-packet workflow remains available.
 
 This package keeps trading logic in deterministic Python and uses the review packet as the single source for Markdown and PDF outputs. The model/prompt layer should request a workflow run; it should not reinterpret sell rules or invent report facts.
 

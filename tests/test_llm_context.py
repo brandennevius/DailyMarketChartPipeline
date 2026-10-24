@@ -315,9 +315,3 @@ def test_llm_output_is_excluded_from_decision_fingerprint():
     before = llm_non_influence_record(packet)
     packet["cross_market_context"]["llm_synthesis"]["validated_output"]["summary"] = "two"
     assert llm_non_influence_record(packet) == before
-
-
-def test_daily_review_workflow_plumbs_secret_and_optional_model_variable():
-    workflow = Path(".github/workflows/daily-review.yml").read_text(encoding="utf-8")
-    assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
-    assert "OPENAI_MARKET_REVIEW_MODEL: ${{ vars.OPENAI_MARKET_REVIEW_MODEL }}" in workflow
